@@ -69,13 +69,13 @@ if conda env list | grep -q "vera"; then
         print_status "Removing existing 'vera' environment..."
         conda env remove -n vera -y
         print_status "Creating new 'vera' environment..."
-        conda create -n vera python=3.10 -y
+        conda create -n vera python=3.11 -y
     else
         print_status "Using existing 'vera' environment"
     fi
 else
     print_status "Creating new 'vera' environment..."
-    conda create -n vera python=3.10 -y
+    conda create -n vera python=3.11 -y
 fi
 
 # Step 2: Activate environment and install system dependencies
@@ -99,7 +99,7 @@ if [ -f "requirements.txt" ]; then
     pip install -r requirements.txt
 else
     print_status "Installing core Python packages..."
-    pip install fastapi uvicorn websockets faster-whisper ctranslate2 torch torchaudio numpy scipy pyyaml
+    pip install fastapi uvicorn websockets faster-whisper ctranslate2 torch torchaudio numpy scipy pyyaml soundfile requests
 fi
 
 # Step 4: Download Piper TTS binary and voices

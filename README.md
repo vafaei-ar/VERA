@@ -27,7 +27,7 @@ VERA is an AI-powered post-discharge stroke care follow-up system that conducts 
 
 ### Software
 - **OS**: Linux (Ubuntu 20.04+ recommended)
-- **Python**: 3.10+
+- **Python**: 3.11+ (3.13+ recommended)
 - **Conda**: Miniconda or Anaconda
 - **CUDA**: 11.8+ with compatible drivers
 - **Browser**: Chrome 88+ or Edge 88+ (for WebRTC support)
@@ -45,7 +45,7 @@ cd VERA
 ```
 
 The setup script will:
-- ✅ Create conda environment with Python 3.10
+- ✅ Create conda environment with Python 3.11
 - ✅ Install all system dependencies (ffmpeg, CUDA support)
 - ✅ Install Python packages from requirements.txt
 - ✅ Download Piper TTS binary and voices
@@ -61,7 +61,7 @@ git clone https://github.com/your-org/VERA.git
 cd VERA
 
 # 2. Create conda environment
-conda create -n vera python=3.10
+conda create -n vera python=3.11
 conda activate vera
 
 # 3. Install dependencies
