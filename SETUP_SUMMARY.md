@@ -108,3 +108,4 @@ python download_models.py
 - All model downloads happen automatically
 - No manual intervention required after running `./setup.sh`
 
+
