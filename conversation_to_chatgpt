@@ -1,0 +1,750 @@
+ALIREZA:
+
+OK, I want the one that can be run in a local network through a webapp (for the showcase). The service will be running on a local GPU workstation (I don't want to use any paid API due to patient privacy).
+
+I am going to develop it with Codex, so I want you to make a detailed plan of how to develop it and I can give that plan to codex later. Also there should be a way that I can give/modify the questions. 
+
+I prefer to keep everything in python (we can also use docker containers if there is an available part that will be easier to use). The frontend does not need to be fancy, something very simple with a button to start the call. The AI can begin the converstion b greeting) 
+
+No authentication is needed (since it is a showcase and I want to just show the app using the local link.)
+
+The app should allow to download the transcribed conversation after the call is done.
+
+
+CHATGPT:
+
+Got it—local-only, Python-first, GPU workstation, super simple web UI, no paid APIs, and you want a **detailed, hand-off plan** you can give to Codex to build a *turn-based* voice call (WebRTC-ish browser call) that:
+
+* greets the patient,
+* asks your scripted questions one by one,
+* **listens until the patient is done speaking**,
+* stores **full audio + per-question transcripts**, and
+* lets you **download the transcript package** at the end.
+
+Below is a concrete blueprint with file layout, tech choices, build steps, and skeleton code that Codex can expand. It’s designed to run entirely on a local LAN, with no auth.
+
+---
+
+# Architecture (all local)
+
+* **Frontend (browser)**: a single HTML page with a “Start Call” button.
+
+  * Uses `getUserMedia` to capture mic audio.
+  * Streams audio chunks to the backend via **WebSocket**.
+  * Plays TTS audio prompts streamed back from the server.
+* **Backend (Python/FastAPI + Uvicorn)**:
+
+  * **Dialog Orchestrator**: tiny finite-state machine that advances through a **YAML scenario file** (easy to edit questions).
+  * **VAD**: server-side **Silero VAD** or `webrtcvad` to detect “user finished speaking.”
+  * **ASR**: **faster-whisper** (GPU, local) to transcribe segments.
+  * **TTS**: **Piper** (local) to synthesize each prompt.
+  * **Recorder**: stores raw audio (WAV) for the full session and produces a transcript JSON + TXT, zipped for download.
+* **Storage**: local `./data/sessions/{session_id}/…` (audio, transcripts, logs).
+* **(Optional)** Docker + `docker-compose` for a one-command up; otherwise, run in a venv.
+
+Why this stack?
+
+* 100% offline, free.
+* Python end-to-end.
+* YAML scenario = easy to modify questions without code.
+* Turn-based simplifies barge-in/duplex; VAD+ASR still feel natural (“listens until you’re done”).
+
+---
+
+# Features you’ll get
+
+* Start button → system **greets** and asks consent.
+* Plays each **prompt (TTS)**, then **listens** until silence (VAD).
+* ASR result saved under the current question key.
+* Moves to next question until finished → thank-you + **Download** button (ZIP: `transcript.json`, `transcript.txt`, `full_audio.wav`).
+* Simple dropdown to choose **Mr./Ms.** and a text box for **name** (optional) before starting.
+
+---
+
+# Project layout
+
+```
+stroke-navigator/
+  backend/
+    app.py
+    audio_io.py
+    vad.py
+    asr.py
+    tts.py
+    dialog.py
+    models/
+      README.md
+    scenarios/
+      default.yml
+    static/
+      index.html
+      app.js
+      styles.css
+  data/
+    sessions/           # runtime output
+  docker/
+    Dockerfile
+    docker-compose.yml
+  requirements.txt
+  README.md
+```
+
+---
+
+# Scenario file (editable by you)
+
+`backend/scenarios/default.yml`
+
+```yaml
+meta:
+  organization: "PennState Health"
+  service_name: "AI stroke navigator"
+  site: "Hershey Medical Center"
+
+greeting:
+  template: >
+    Good {timeofday} {honorific} {patient_name}. I am an AI stroke navigator calling from {organization}.
+    I understand you recently had an ischemic stroke and received care at {site}.
+    I’m going to ask a few questions to see how you’re doing after discharge.
+    I can’t answer questions during this call, but I’ll record additional requests at the end.
+    With your consent, this call will be recorded for care documentation. Do you consent to proceed?
+  variables:
+    - timeofday     # computed
+    - honorific     # UI input: "Mr." or "Ms."
+    - patient_name  # UI input
+    - organization
+    - site
+
+flow:
+  - key: consent
+    type: confirm   # confirm/yes-no; any non-affirm = exit
+    prompt: "Do you consent to proceed?"
+    on_deny: "Understood. We won’t proceed. If this is an emergency, please call your local emergency number. Goodbye."
+
+  - key: know_ischemic
+    type: free
+    prompt: "Do you know what an ischemic stroke is? Please share in your own words."
+
+  - section: "General Well-Being"
+  - key: general_feeling
+    type: free
+    prompt: "How have you been feeling since your hospital discharge?"
+  - key: new_symptoms
+    type: free
+    prompt: "Have you noticed any new or worsening symptoms—weakness, speech problems, vision changes, or balance issues?"
+  - key: pain_fatigue_mood
+    type: free
+    prompt: "Are you experiencing pain, headaches, unusual fatigue, anxiety, or depressed mood?"
+
+  - section: "Medications and Adherence"
+  - key: meds_pickup
+    type: free
+    prompt: "Were you able to pick up all your prescribed medications?"
+  - key: meds_understanding
+    type: free
+    prompt: "Do you understand what each medication is for and how to take it?"
+  - key: meds_adherence
+    type: free
+    prompt: "Have you missed any doses or had trouble taking your medications?"
+  - key: meds_sidefx
+    type: free
+    prompt: "Any side effects you’ve noticed—dizziness, bleeding, nausea, etc.?"
+
+  - section: "Follow-up Care"
+  - key: fup_scheduled
+    type: free
+    prompt: "Have you scheduled follow-up visits with your primary care provider and neurologist?"
+  - key: rehab_scheduled
+    type: free
+    prompt: "Do you have rehabilitation therapy—physical, occupational, or speech—sessions scheduled?"
+  - key: transport_help
+    type: free
+    prompt: "Do you need help with transportation to appointments?"
+
+  - section: "Lifestyle Management"
+  - key: lifestyle_adherence
+    type: free
+    prompt: "Have you been able to follow any diet or activity recommendations given at discharge?"
+  - key: bp_readings
+    type: free
+    prompt: "Are you checking your blood pressure at home? If yes, please share your recent readings."
+  - key: tobacco_alcohol
+    type: free
+    prompt: "Do you smoke or drink alcohol, and has anyone talked with you about reducing risks?"
+
+  - section: "Daily Activities and Supports"
+  - key: adl_support
+    type: free
+    prompt: "How are you managing your daily activities—walking, bathing, cooking, etc.?"
+  - key: home_safety
+    type: free
+    prompt: "Any challenges with mobility or safety at home—stairs, bathroom access, or falls?"
+
+  - section: "Next Step"
+  - key: who_to_call
+    type: free
+    prompt: "Do you know who to call if you experience new symptoms or have questions about your care?"
+  - key: resources_interest
+    type: free
+    prompt: "Would you like information about support groups, counseling, or community resources?"
+  - key: specific_help
+    type: free
+    prompt: "Is there anything specific you need help with right now?"
+
+wrapup:
+  message: >
+    Thank you. I’ve recorded your responses. A clinician will review and follow up if needed.
+    If this is an emergency, please call your local emergency number now. Goodbye.
+```
+
+> To edit questions later, you’ll just update this YAML. You can also create multiple scenario files and choose one via a query param or dropdown.
+
+---
+
+# Backend components
+
+## `app.py` (FastAPI endpoints)
+
+* `GET /` → serve `index.html`.
+* `POST /api/start` → create session, load scenario, build greeting from template, generate first TTS, return a `session_id`.
+* `WS /ws/audio/{session_id}`:
+
+  * Receives **audio chunks** from browser (WebM/Opus or raw PCM).
+  * Buffers to a **session WAV** (for full-call archive).
+  * Runs **VAD** on the incoming stream; when end-of-speech detected, finalize a segment:
+
+    * run **ASR** on the segment (faster-whisper GPU),
+    * save transcript for current question,
+    * advance dialog state & synthesize next prompt via **Piper**,
+    * send the **TTS audio bytes** back to the client over the same WebSocket (or a second `/ws/tts` channel).
+* `GET /api/download/{session_id}` → returns ZIP (transcript.json, transcript.txt, audio.wav).
+
+## `vad.py`
+
+* Implements streaming VAD:
+
+  * Use `silero-vad` (PyTorch) or `webrtcvad` (CPU) to mark voiced frames.
+  * Parameters: sample rate 16kHz, frame length 20–30ms, `silence_ms_to_finalize` \~ 800–1200ms.
+  * Emits “finalize” when sufficient trailing silence detected.
+
+## `asr.py`
+
+* Wrap **faster-whisper**:
+
+  * load model once at startup (e.g., `medium.en` or `large-v3` if your GPU has VRAM).
+  * `transcribe(audio_segment)` → returns text + timestamps + average confidence.
+
+## `tts.py`
+
+* Wrap **Piper**:
+
+  * on startup, verify voice model files are present (e.g., `en_US-amy-medium`).
+  * `synthesize(text)` → returns WAV/PCM16 bytes (16kHz) suitable for immediate playback.
+
+## `dialog.py`
+
+* Loads YAML scenario.
+* Tracks:
+
+  * `current_index`, `current_key`, `responses = {key: {text, confidence, start_ts, end_ts}}`.
+  * Greeting variables: compute `{timeofday}` from clock; take `{honorific}` & `{patient_name}` from UI.
+* `next_prompt()` returns the next string to speak (skipping “section” markers).
+* Handles `type: confirm` → apply a simple yes/no regex on ASR text (`\b(yes|yeah|yep|i consent|ok)\b` vs `\b(no|don’t|decline)\b`).
+
+## `audio_io.py`
+
+* WebM/Opus decode (if you send compressed chunks): call `ffmpeg` (locally) or use PyAV to convert to PCM16 16kHz.
+* WAV writer to append incoming PCM to `{session}/full_audio.wav`.
+
+---
+
+# Frontend (minimal)
+
+`static/index.html`
+
+```html
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Stroke Navigator (Local)</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <h1>AI Stroke Navigator (Local)</h1>
+
+  <div class="row">
+    <label>Honorific:</label>
+    <select id="honorific"><option>Mr.</option><option>Ms.</option></select>
+    <label>Name:</label>
+    <input id="patientName" placeholder="Smith" />
+    <button id="startBtn">Start Call</button>
+  </div>
+
+  <div id="status">Idle.</div>
+  <audio id="ttsPlayer" autoplay></audio>
+
+  <div class="row">
+    <button id="downloadBtn" disabled>Download Transcript</button>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
+```
+
+`static/app.js` (flow overview)
+
+```js
+const startBtn = document.getElementById('startBtn');
+const downloadBtn = document.getElementById('downloadBtn');
+const statusDiv = document.getElementById('status');
+const ttsPlayer = document.getElementById('ttsPlayer');
+
+let ws, sessionId, mediaStream, audioWorkletNode;
+
+startBtn.onclick = async () => {
+  const honorific = document.getElementById('honorific').value;
+  const patientName = document.getElementById('patientName').value || 'Patient';
+
+  const resp = await fetch('/api/start', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ honorific, patient_name: patientName, scenario: 'default.yml' })
+  });
+  const data = await resp.json();
+  sessionId = data.session_id;
+
+  // open WebSocket for bidirectional audio
+  ws = new WebSocket(`ws://${location.host}/ws/audio/${sessionId}`);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onmessage = (evt) => {
+    // server sends back TTS WAV chunks (PCM16)
+    const blob = new Blob([evt.data], { type: 'audio/wav' });
+    ttsPlayer.src = URL.createObjectURL(blob);
+  };
+
+  await startStreamingMic();
+  statusDiv.textContent = 'Call started. Listening...';
+};
+
+async function startStreamingMic() {
+  mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const audioCtx = new AudioContext({ sampleRate: 16000 });
+  await audioCtx.audioWorklet.addModule('/static/pcm-worklet.js');
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  audioWorkletNode = new AudioWorkletNode(audioCtx, 'pcm-worklet', { processorOptions: { }});
+  source.connect(audioWorkletNode);
+  audioWorkletNode.connect(audioCtx.destination); // or not connected to avoid loopback
+  audioWorkletNode.port.onmessage = (e) => {
+    if (ws?.readyState === 1) ws.send(e.data); // send Int16Array PCM frames
+  };
+}
+
+downloadBtn.onclick = () => {
+  if (!sessionId) return;
+  window.location = `/api/download/${sessionId}`;
+};
+```
+
+`static/pcm-worklet.js` – converts Float32 to Int16 PCM 16kHz and posts messages with `ArrayBuffer` frames to send via WS. (Codex can implement; keep frames \~20–30ms each.)
+
+---
+
+# Key backend snippets (Codex can fill in)
+
+**FastAPI app skeleton** — `backend/app.py`
+
+```python
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+import uuid, time, os, json, zipfile, io
+from dialog import Dialog
+from asr import ASR
+from tts import TTS
+from vad import StreamingVAD
+from audio_io import WavAppendWriter
+
+app = FastAPI()
+app.mount("/static", StaticFiles(directory="backend/static"), name="static")
+
+SESSIONS = {}  # session_id -> dict(state,...)
+ASR_ENGINE = ASR(model_size="medium.en")     # load on startup (GPU)
+TTS_ENGINE = TTS(voice="en_US-amy-medium")   # piper voice id
+VAD = StreamingVAD(sample_rate=16000)
+
+@app.get("/")
+def index():
+    return FileResponse("backend/static/index.html")
+
+@app.post("/api/start")
+async def start(req: Request):
+    body = await req.json()
+    honorific = body.get("honorific", "Mr.")
+    patient_name = body.get("patient_name", "Patient")
+    scenario_file = body.get("scenario", "default.yml")
+
+    session_id = str(uuid.uuid4())
+    session_dir = f"data/sessions/{session_id}"
+    os.makedirs(session_dir, exist_ok=True)
+
+    dialog = Dialog(scenario_path=f"backend/scenarios/{scenario_file}",
+                    honorific=honorific, patient_name=patient_name)
+    # synthesize greeting (returns bytes of wav)
+    greeting_text = dialog.build_greeting()
+    greeting_wav = TTS_ENGINE.synthesize(greeting_text)
+
+    # init writers
+    wav_writer = WavAppendWriter(os.path.join(session_dir, "full_audio.wav"), sample_rate=16000)
+    SESSIONS[session_id] = dict(dialog=dialog, writer=wav_writer, created=time.time(),
+                                transcript=[], finished=False)
+
+    return JSONResponse({"session_id": session_id})  # client will open WS and receive TTS there
+
+@app.websocket("/ws/audio/{session_id}")
+async def audio_ws(ws: WebSocket, session_id: str):
+    await ws.accept()
+    state = SESSIONS[session_id]
+    dialog: Dialog = state["dialog"]
+    writer: WavAppendWriter = state["writer"]
+
+    # send greeting TTS first
+    await ws.send_bytes(TTS_ENGINE.synthesize(dialog.last_prompt_text))
+
+    # streaming loop
+    vad = StreamingVAD(sample_rate=16000)
+    pcm_buffer = bytearray()
+
+    try:
+        while True:
+            frame = await ws.receive_bytes()  # Int16 PCM frame from AudioWorklet
+            writer.append(frame)
+            speech_state = vad.accept_frame(frame)
+
+            pcm_buffer.extend(frame)
+
+            if speech_state == "finalize_utterance":
+                # transcribe buffered speech
+                text, conf = ASR_ENGINE.transcribe(bytes(pcm_buffer))
+                pcm_buffer.clear()
+
+                # store answer
+                key = dialog.current_key
+                state["transcript"].append({"key": key, "text": text, "confidence": conf, "ts": time.time()})
+                dialog.submit_answer(text)
+
+                # get next prompt or wrapup
+                nxt = dialog.next_prompt()
+                if nxt is None:
+                    state["finished"] = True
+                    writer.close()
+                    # send wrapup
+                    await ws.send_bytes(TTS_ENGINE.synthesize(dialog.wrapup_text))
+                    await ws.close()
+                    break
+                else:
+                    await ws.send_bytes(TTS_ENGINE.synthesize(nxt))
+    except WebSocketDisconnect:
+        writer.close()
+```
+
+**Dialog FSM** — `backend/dialog.py`
+
+```python
+import yaml, datetime, re
+
+AFFIRM = re.compile(r"\b(yes|yeah|yep|ok|i consent|agree|sure)\b", re.I)
+DENY   = re.compile(r"\b(no|nope|nah|decline|don'?t|do not)\b", re.I)
+
+class Dialog:
+    def __init__(self, scenario_path, honorific="Mr.", patient_name="Patient"):
+        with open(scenario_path, "r", encoding="utf-8") as f:
+            self.scn = yaml.safe_load(f)
+        self.index = -1
+        self.responses = {}
+        self.honorific = honorific
+        self.patient_name = patient_name
+        self.wrapup_text = self.scn["wrapup"]["message"]
+        self.last_prompt_text = None
+        self.current_key = None
+
+    def _timeofday(self):
+        h = datetime.datetime.now().hour
+        return "morning" if h < 12 else ("afternoon" if h < 18 else "evening")
+
+    def build_greeting(self):
+        meta = self.scn["meta"]
+        tmpl = self.scn["greeting"]["template"]
+        txt = tmpl.format(
+            timeofday=self._timeofday(),
+            honorific=self.honorific,
+            patient_name=self.patient_name,
+            organization=meta.get("organization",""),
+            site=meta.get("site",""),
+        )
+        self.last_prompt_text = txt
+        # prime first actionable step after consent
+        return txt
+
+    def next_prompt(self):
+        flow = self.scn["flow"]
+        while True:
+            self.index += 1
+            if self.index >= len(flow):
+                self.current_key = None
+                return None
+            step = flow[self.index]
+            if "section" in step:
+                # say a brief header or skip announcing sections; here we skip
+                continue
+            self.current_key = step["key"]
+            self.current_type = step.get("type", "free")
+            self.last_prompt_text = step["prompt"]
+            return self.last_prompt_text
+
+    def submit_answer(self, text):
+        # handle confirms
+        if self.current_type == "confirm":
+            if DENY.search(text) and "on_deny" in self.scn["flow"][self.index]:
+                # override wrapup quickly
+                self.last_prompt_text = self.scn["flow"][self.index]["on_deny"]
+                # jump to end
+                self.index = 10**9
+                self.wrapup_text = ""  # we already said goodbye
+            elif not AFFIRM.search(text):
+                # reprompt consent if unclear
+                self.index -= 1  # step back to re-ask
+        self.responses[self.current_key] = text
+```
+
+**ASR wrapper** — `backend/asr.py`
+
+```python
+from faster_whisper import WhisperModel
+import numpy as np
+import io, soundfile as sf
+
+class ASR:
+    def __init__(self, model_size="medium.en", device="cuda", compute_type="float16"):
+        self.model = WhisperModel(model_size, device=device, compute_type=compute_type)
+
+    def transcribe(self, wav_bytes: bytes):
+        # bytes are PCM16 mono 16k; pack to numpy then to WAV buffer for faster-whisper
+        pcm = np.frombuffer(wav_bytes, dtype=np.int16)
+        buf = io.BytesIO()
+        sf.write(buf, pcm.astype('float32')/32768.0, 16000, format='WAV')
+        buf.seek(0)
+        segments, info = self.model.transcribe(buf, beam_size=1, language="en")
+        text = "".join([s.text for s in segments]).strip()
+        conf = getattr(info, "avg_logprob", 0.0)
+        return text, float(conf)
+```
+
+**TTS wrapper (Piper)** — `backend/tts.py`
+
+```python
+import subprocess, tempfile, os
+
+class TTS:
+    def __init__(self, voice="en_US-amy-medium", piper_bin="piper"):
+        self.voice = voice
+        self.bin = piper_bin
+        self.model_path = f"backend/models/piper/{voice}.onnx"
+        self.config_path = f"backend/models/piper/{voice}.onnx.json"
+
+    def synthesize(self, text: str) -> bytes:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as out:
+            out_name = out.name
+        cmd = [self.bin, "-m", self.model_path, "-c", self.config_path, "-f", out_name, "-t", text]
+        subprocess.run(cmd, check=True)
+        data = open(out_name, "rb").read()
+        os.remove(out_name)
+        return data
+```
+
+**VAD (Silero)** — `backend/vad.py`
+
+```python
+import torch, numpy as np
+# load silero vad model once
+model, utils = torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False)
+(get_speech_ts, _, read_audio, *_ ) = utils
+
+class StreamingVAD:
+    def __init__(self, sample_rate=16000, min_silence_ms=900):
+        self.sample_rate = sample_rate
+        self.min_silence = min_silence_ms
+        self.buf = bytearray()
+        self.silence_ms = 0
+        self.in_speech = False
+
+    def accept_frame(self, pcm_bytes: bytes):
+        # append and decide when to finalize; keep it simple for Codex to refine
+        self.buf.extend(pcm_bytes)
+        # naive: if frame is near-silent (energy below threshold) accumulate silence
+        arr = np.frombuffer(pcm_bytes, dtype=np.int16)
+        energy = np.mean(np.abs(arr))
+        if energy < 200:  # tweak
+            self.silence_ms += int(1000 * len(arr) / self.sample_rate)
+        else:
+            self.in_speech = True
+            self.silence_ms = 0
+
+        if self.in_speech and self.silence_ms > self.min_silence:
+            # signal end of utterance; the ASR will use whatever is buffered in app.py
+            self.in_speech = False
+            self.silence_ms = 0
+            return "finalize_utterance"
+        return "continue"
+```
+
+**WAV writer** — `backend/audio_io.py`
+
+```python
+import wave, os
+
+class WavAppendWriter:
+    def __init__(self, path, sample_rate=16000):
+        self.path = path
+        self.sample_rate = sample_rate
+        self._ensure_header()
+
+    def _ensure_header(self):
+        if not os.path.exists(self.path):
+            with wave.open(self.path, 'wb') as w:
+                w.setnchannels(1)
+                w.setsampwidth(2)
+                w.setframerate(self.sample_rate)
+                w.writeframes(b'')
+
+    def append(self, pcm_bytes: bytes):
+        with wave.open(self.path, 'rb') as r:
+            params = r.getparams()
+            frames = r.readframes(r.getnframes())
+        with wave.open(self.path, 'wb') as w:
+            w.setparams(params)
+            w.writeframes(frames + pcm_bytes)
+
+    def close(self):
+        pass
+```
+
+---
+
+# Requirements & setup
+
+`requirements.txt`
+
+```
+fastapi
+uvicorn[standard]
+pyyaml
+faster-whisper
+torch          # for silero-vad (CPU ok), or use webrtcvad instead
+soundfile
+numpy
+```
+
+**Models you need to place locally:**
+
+* **faster-whisper** will auto-download the Whisper model to `~/.cache` on first run (internet). If totally offline, pre-seed the model directory.
+* **Piper** binary + voice model (`.onnx` + `.onnx.json`) in `backend/models/piper/`.
+
+**Run (venv):**
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn backend.app:app --host 0.0.0.0 --port 8000
+# open http://<workstation-ip>:8000 on your LAN
+```
+
+---
+
+# Optional: Docker (GPU)
+
+`docker/Dockerfile` (sketch)
+
+```dockerfile
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip
+WORKDIR /app
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+COPY backend/ backend/
+COPY data/ data/
+ENV PYTHONUNBUFFERED=1
+EXPOSE 8000
+CMD ["uvicorn", "backend.app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+`docker/docker-compose.yml`
+
+```yaml
+version: "3.9"
+services:
+  web:
+    build: ../
+    ports: ["8000:8000"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    volumes:
+      - ../backend/models:/app/backend/models
+      - ../data:/app/data
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+```
+
+Run:
+
+```bash
+cd docker
+docker compose up --build
+```
+
+---
+
+# How “listen until done” works (turn taking)
+
+1. Server plays a prompt (TTS).
+2. Browser starts sending PCM frames continuously over WS.
+3. Server VAD monitors frames and builds an **utterance buffer**; once it sees \~900 ms of silence after speech, it **finalizes** that utterance.
+4. Server runs ASR on the finalized utterance, stores the text, and immediately synthesizes the **next prompt** and streams it back.
+5. Repeat until the end; then server plays wrap-up and closes WS.
+
+This matches your requirement without relying on any cloud APIs.
+
+---
+
+# What to hand to Codex (task list)
+
+1. **Scaffold FastAPI project** with endpoints in `app.py` as shown.
+2. **Implement WS audio** path (PCM16 frames) and WAV append recording.
+3. **Implement VAD** (`vad.py`) with a silence-based fallback and (bonus) Silero VAD integration.
+4. **Integrate faster-whisper** (`asr.py`), GPU enabled; pick model size based on VRAM.
+5. **Integrate Piper** (`tts.py`), provide a voice model path; return WAV bytes.
+6. **Implement dialog FSM** (`dialog.py`) reading `scenarios/default.yml` and handling `confirm/free`.
+7. **Frontend**: `index.html`, `app.js`, `pcm-worklet.js`. Start button -> POST `/api/start` -> open WS -> stream mic -> play incoming TTS.
+8. **Transcript packaging**: after session, write `transcript.json` (per-question list with timestamps & confidence), `transcript.txt` (human-readable), and include `full_audio.wav` in a ZIP the user can download via `/api/download/{session_id}`.
+9. **Polish**: a status line (“Listening… / Thinking… / Speaking…”), and a disabled/enabled **Download** button.
+
+---
+
+# Safety/clinical notes for the demo
+
+* The script already states it **cannot answer questions** and captures requests for a clinician.
+* Include the emergency disclaimer in greeting and wrap-up (done).
+* Store a **consent flag** in `transcript.json` (from the `consent` step).
+
+---
+
+If you want, I can also produce:
+
+* a ready-to-run **`default.yml`** filled with your exact wording (already included),
+* a tiny **report HTML** generator that formats the transcript nicely,
+* and a checklist to verify mic permissions on Chrome/Edge.
+

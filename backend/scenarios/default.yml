@@ -1,0 +1,146 @@
+meta:
+  organization: "PennState Health"
+  service_name: "AI stroke navigator"
+  site: "Hershey Medical Center"
+  version: "1.0"
+  description: "Post-discharge stroke care follow-up assessment"
+
+greeting:
+  template: >
+    Good {timeofday} {honorific} {patient_name}. I am an AI stroke navigator calling from {organization}.
+    I understand you recently had an ischemic stroke and received care at {site}.
+    I'm going to ask a few questions to see how you're doing after discharge.
+    I can't answer questions during this call, but I'll record additional requests at the end.
+    With your consent, this call will be recorded for care documentation. Do you consent to proceed?
+  variables:
+    - timeofday     # computed: morning/afternoon/evening
+    - honorific     # UI input: "Mr." or "Ms."
+    - patient_name  # UI input
+    - organization  # from meta
+    - site         # from meta
+
+flow:
+  - key: consent
+    type: confirm
+    prompt: "Do you consent to proceed with this recorded call?"
+    on_deny: "I understand. We won't proceed with the call. If this is an emergency, please call your local emergency number or 911. If you'd like to speak with someone from our care team, please call the main hospital number. Thank you and goodbye."
+
+  - key: know_ischemic
+    type: free
+    prompt: "Do you know what an ischemic stroke is? Please share in your own words what you understand about your condition."
+
+  - section: "General Well-Being"
+  
+  - key: general_feeling
+    type: free
+    prompt: "How have you been feeling overall since your hospital discharge?"
+  
+  - key: new_symptoms
+    type: free
+    prompt: "Have you noticed any new or worsening symptoms since discharge? This could include weakness, speech problems, vision changes, balance issues, or anything else that concerns you."
+  
+  - key: pain_fatigue_mood
+    type: free
+    prompt: "Are you experiencing any pain, headaches, unusual fatigue, anxiety, or changes in your mood?"
+
+  - section: "Medications and Adherence"
+  
+  - key: meds_pickup
+    type: free
+    prompt: "Were you able to pick up all your prescribed medications from the pharmacy?"
+  
+  - key: meds_understanding
+    type: free
+    prompt: "Do you understand what each of your medications is for and how to take them? Do you have any questions about your medications?"
+  
+  - key: meds_adherence
+    type: free
+    prompt: "Have you missed any doses of your medications, or have you had trouble taking them as prescribed?"
+  
+  - key: meds_sidefx
+    type: free
+    prompt: "Have you noticed any side effects from your medications? This could include dizziness, unusual bleeding, nausea, or any other concerning symptoms."
+
+  - section: "Follow-up Care"
+  
+  - key: fup_scheduled
+    type: free
+    prompt: "Have you scheduled follow-up visits with your primary care provider and neurologist as recommended?"
+  
+  - key: rehab_scheduled
+    type: free
+    prompt: "Do you have rehabilitation therapy sessions scheduled? This might include physical therapy, occupational therapy, or speech therapy."
+  
+  - key: transport_help
+    type: free
+    prompt: "Do you need help with transportation to your medical appointments?"
+
+  - section: "Lifestyle Management"
+  
+  - key: lifestyle_adherence
+    type: free
+    prompt: "Have you been able to follow any diet or activity recommendations that were given to you at discharge?"
+  
+  - key: bp_readings
+    type: free
+    prompt: "Are you checking your blood pressure at home? If yes, what have your recent readings been?"
+  
+  - key: tobacco_alcohol
+    type: free
+    prompt: "Do you currently smoke tobacco or drink alcohol? Has anyone from the care team talked with you about reducing these risk factors?"
+
+  - section: "Daily Activities and Support"
+  
+  - key: adl_support
+    type: free
+    prompt: "How are you managing your daily activities like walking, bathing, dressing, and cooking? Do you need help with any of these activities?"
+  
+  - key: home_safety
+    type: free
+    prompt: "Are there any challenges with mobility or safety in your home? For example, stairs, bathroom access, or concerns about falling?"
+  
+  - key: support_system
+    type: free
+    prompt: "Do you have family or friends helping you at home? How is that support working for you?"
+
+  - section: "Resources and Next Steps"
+  
+  - key: who_to_call
+    type: free
+    prompt: "Do you know who to call if you experience new stroke symptoms or have urgent questions about your care?"
+  
+  - key: resources_interest
+    type: free
+    prompt: "Would you be interested in information about stroke support groups, counseling services, or community resources?"
+  
+  - key: specific_help
+    type: free
+    prompt: "Is there anything specific you need help with right now that we haven't discussed?"
+  
+  - key: additional_concerns
+    type: free
+    prompt: "Do you have any other questions or concerns you'd like me to note for your care team?"
+
+wrapup:
+  message: >
+    Thank you for taking the time to speak with me today. I've recorded all of your responses, 
+    and a member of our clinical care team will review them and follow up with you if needed.
+    
+    Remember, if you experience any new stroke symptoms such as sudden weakness, speech problems, 
+    vision changes, severe headache, or loss of balance, call 911 immediately.
+    
+    For non-urgent questions, you can always contact your primary care provider or our stroke care team.
+    
+    Take care, and thank you again for your time. Goodbye.
+
+emergency_disclaimer: >
+  If you are experiencing a medical emergency or new stroke symptoms right now, 
+  please hang up and call 911 immediately.
+
+stroke_warning_signs:
+  - "Sudden weakness or numbness in face, arm, or leg, especially on one side"
+  - "Sudden confusion or trouble speaking or understanding speech"
+  - "Sudden trouble seeing in one or both eyes"
+  - "Sudden severe headache with no known cause"
+  - "Sudden trouble walking, dizziness, or loss of balance"
+

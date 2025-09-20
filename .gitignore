@@ -3,6 +3,23 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# VERA-specific exclusions
+# Session data and logs
+data/sessions/*
+logs/*.log
+logs/*.txt
+
+# Downloaded models and binaries
+backend/models/piper/*.onnx
+backend/models/piper/*.onnx.json
+backend/piper/
+backend/models/whisper/
+
+# Temporary files
+*.tmp
+*.temp
+test_setup.py
+
 # C extensions
 *.so
 

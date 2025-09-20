@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VERA - Voice-Enabled Recovery Assistant</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>VERA</h1>
+            <p class="subtitle">Voice-Enabled Recovery Assistant</p>
+            <p class="description">AI-powered post-discharge stroke care follow-up</p>
+        </header>
+
+        <main>
+            <div class="setup-section" id="setupSection">
+                <h2>Patient Information</h2>
+                <div class="form-group">
+                    <label for="honorific">Title:</label>
+                    <select id="honorific" class="form-control">
+                        <option value="Mr.">Mr.</option>
+                        <option value="Ms.">Ms.</option>
+                        <option value="Mrs.">Mrs.</option>
+                        <option value="Dr.">Dr.</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="patientName">Name:</label>
+                    <input type="text" id="patientName" class="form-control" placeholder="Patient name" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="voiceSelect">Voice:</label>
+                    <select id="voiceSelect" class="form-control">
+                        <option value="en_US-amy-medium">Amy (Female, Medium Quality)</option>
+                        <option value="en_US-lessac-medium">Lessac (Female, Medium Quality)</option>
+                        <option value="en_US-ryan-high">Ryan (Male, High Quality)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="voiceRate">Speed:</label>
+                    <select id="voiceRate" class="form-control">
+                        <option value="0.85">Fast</option>
+                        <option value="1.0" selected>Normal</option>
+                        <option value="1.15">Slow</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="scenarioSelect">Scenario:</label>
+                    <select id="scenarioSelect" class="form-control">
+                        <option value="default.yml">Default Stroke Follow-up</option>
+                    </select>
+                </div>
+
+                <button id="startBtn" class="btn btn-primary">
+                    <span class="btn-icon">🎙️</span>
+                    Start Call
+                </button>
+            </div>
+
+            <div class="call-section" id="callSection" style="display: none;">
+                <div class="status-container">
+                    <div class="status-indicator" id="statusIndicator">
+                        <div class="pulse"></div>
+                    </div>
+                    <div class="status-text" id="statusText">Preparing...</div>
+                    <div class="mic-meter" id="micMeter" style="display:none;">
+                        <div class="mic-level" id="micLevel"></div>
+                    </div>
+                </div>
+
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0% Complete</div>
+                </div>
+
+                <div class="controls">
+                    <button id="endCallBtn" class="btn btn-secondary">
+                        <span class="btn-icon">📞</span>
+                        End Call
+                    </button>
+                </div>
+
+                <!-- Hidden audio element for TTS playback -->
+                <audio id="ttsPlayer" autoplay></audio>
+            </div>
+
+            <div class="complete-section" id="completeSection" style="display: none;">
+                <div class="completion-message">
+                    <h2>Call Completed</h2>
+                    <p>Thank you for completing the follow-up assessment. Your responses have been recorded and will be reviewed by your care team.</p>
+                </div>
+
+                <div class="download-container">
+                    <button id="downloadBtn" class="btn btn-success">
+                        <span class="btn-icon">💾</span>
+                        Download Transcript
+                    </button>
+                </div>
+
+                <div class="restart-container">
+                    <button id="newCallBtn" class="btn btn-outline">
+                        <span class="btn-icon">🔄</span>
+                        Start New Call
+                    </button>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <div class="health-status" id="healthStatus">
+                <span class="status-dot" id="healthDot"></span>
+                <span id="healthText">Checking system status...</span>
+            </div>
+            <div class="disclaimer">
+                <p><strong>Important:</strong> If you are experiencing a medical emergency or new stroke symptoms, 
+                   please hang up and call 911 immediately.</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Error Modal -->
+    <div class="modal" id="errorModal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Error</h3>
+                <button class="modal-close" id="modalClose">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="errorMessage">An error occurred.</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" id="modalOk">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
+

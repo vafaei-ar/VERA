@@ -1,0 +1,51 @@
+app:
+  host: "0.0.0.0"
+  port: 8000
+  debug: true
+
+models:
+  whisper:
+    model_size: "large-v3"  # medium.en, large-v2, large-v3
+    device: "cuda"
+    compute_type: "float16"
+    device_index: null  # Let ctranslate2 choose the best GPU
+  
+  piper:
+    binary_path: "./piper/piper"
+    voice_dir: "./models/piper"
+    default_voice: "en_US-amy-medium"  # will be selectable at runtime
+    available_voices:
+      - "en_US-amy-medium"
+      - "en_US-lessac-medium"
+      - "en_US-libritts-high"
+    speaking_rate: 1.0  # phoneme length scale
+    noise_scale: 0.667
+    noise_w: 0.8
+
+vad:
+  type: "energy"  # energy, silero
+  sample_rate: 16000
+  frame_length_ms: 30
+  energy_threshold: 5.0  # tuned for int16 energy metric used by the streaming VAD
+  silence_duration_ms: 900  # how long to wait before finalizing utterance
+  max_speech_duration_ms: 15000  # force finalize after 15s of speech
+  
+  # Silero VAD settings (when type=silero)
+  silero_threshold: 0.5
+  min_speech_duration_ms: 250
+  max_speech_duration_s: 30
+
+audio:
+  sample_rate: 16000
+  channels: 1
+  bit_depth: 16
+
+session:
+  default_scenario: "default.yml"
+  session_timeout_minutes: 30
+  max_concurrent_sessions: 10
+
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file: "logs/vera.log"
