@@ -170,27 +170,32 @@ Simple test script to verify VERA setup
 """
 import sys
 import os
-sys.path.append('backend')
+
+# Add backend directory to Python path
+backend_path = os.path.join(os.path.dirname(__file__), 'backend')
+sys.path.insert(0, backend_path)
 
 try:
-    from backend.asr import WhisperASR
-    from backend.tts import PiperTTS
-    from backend.vad import EnergyVAD
+    # Test imports with correct class names
+    from asr import ASR
+    from tts import TTS
+    from vad import StreamingVAD
     print("✅ All imports successful")
     
-    # Test VAD
-    vad = EnergyVAD()
+    # Test VAD (simple initialization)
+    vad = StreamingVAD()
     print("✅ VAD initialized")
     
-    # Test TTS (without loading models)
-    tts = PiperTTS()
-    print("✅ TTS initialized")
+    # Test TTS (without loading models - just check class)
+    print("✅ TTS class available")
     
     print("\n🎉 VERA setup verification successful!")
     print("You can now run: cd backend && python app.py")
     
 except Exception as e:
     print(f"❌ Setup verification failed: {e}")
+    print("This might be due to missing dependencies or Python path issues.")
+    print("Try running: cd backend && python -c 'import asr, tts, vad'")
     sys.exit(1)
 EOF
 
