@@ -30,7 +30,7 @@ class VERAApp {
             'setupSection', 'callSection', 'completeSection',
             'honorific', 'patientName', 'voiceSelect', 'voiceRate', 'scenarioSelect',
             'startBtn', 'endCallBtn', 'downloadBtn', 'newCallBtn',
-            'statusIndicator', 'statusText', 'progressFill', 'progressText',
+            'statusIndicator', 'statusText', 'progressContainer', 'progressFill', 'progressText',
             'ttsPlayer', 'healthStatus', 'healthDot', 'healthText',
             'errorModal', 'modalClose', 'modalOk', 'errorMessage',
             'transcriptContainer', 'toggleTranscript', 'transcriptMessages', 'currentTranscriptText'
@@ -65,12 +65,6 @@ class VERAApp {
         
         // Initialize transcript visibility based on checkbox (hidden by default on main page)
         this.transcriptVisible = this.elements.toggleTranscript.checked;
-        if (this.elements.transcriptContainer) {
-            this.elements.transcriptContainer.style.display = 'none'; // Hidden on main page
-            console.log('Transcript visibility initialized:', this.transcriptVisible);
-        } else {
-            console.error('Transcript container not found!');
-        }
     }
     
     validateForm() {
@@ -214,15 +208,29 @@ class VERAApp {
             this.websocket.onopen = () => {
                 this.setStatus('Connected - Starting conversation...');
                 this.isRecording = true;
-                // Show transcript during call if checkbox was checked
-                this.transcriptVisible = this.elements.toggleTranscript.checked;
-                if (this.transcriptVisible) {
+
+                // Show the progress bar on the call page
+                this.elements.progressContainer.style.display = 'block';
+
+                // Show transcript during call only if checkbox was checked on the setup page
+                console.log('Checkbox checked:', this.elements.toggleTranscript.checked);
+                console.log('Transcript container:', this.elements.transcriptContainer);
+                
+                if (this.elements.toggleTranscript.checked) {
+                    this.transcriptVisible = true;
                     this.elements.transcriptContainer.style.display = 'block';
+                    console.log('✅ TRANSCRIPT BOX SHOULD BE VISIBLE NOW');
+                    
                     // Add initial message to transcript
                     if (this.elements.transcriptMessages) {
                         this.elements.transcriptMessages.innerHTML = '<div class="transcript-message ai-question"><div class="transcript-message-header">AI: Ready</div><div class="transcript-message-text">Starting conversation...</div></div>';
                     }
+                } else {
+                    this.transcriptVisible = false;
+                    this.elements.transcriptContainer.style.display = 'none';
+                    console.log('❌ TRANSCRIPT BOX HIDDEN - CHECKBOX NOT CHECKED');
                 }
+
                 resolve();
             };
             
@@ -239,11 +247,12 @@ class VERAApp {
                             this.showTextMessage(message.message, message.prompt);
                         } else if (message.type === 'progress_update') {
                             // Update progress bar
-                            console.log('Received progress update:', message.progress);
+                            console.log('✅ RECEIVED PROGRESS UPDATE:', message.progress);
                             console.log('Progress data:', JSON.stringify(message.progress, null, 2));
                             this.updateProgressFromMessage(message.progress);
                         } else if (message.type === 'transcript_update') {
                             // Update live transcript
+                            console.log("Received ASR transcript update:", message); // Debugging line
                             this.addTranscriptMessage(message.text, message.confidence, message.is_final);
                         } else if (message.type === 'ai_question') {
                             // Add AI question to transcript

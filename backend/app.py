@@ -40,7 +40,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="VERA - Voice-Enabled Recovery Assistant", version="1.0.0")
+app = FastAPI(
+    title="VERA - Voice-Enabled Recovery Assistant",
+    description="AI-powered post-discharge stroke care follow-up system",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # Mount static files
 static_dir = Path(__file__).parent / "static"
@@ -65,41 +70,31 @@ class HealthResponse(BaseModel):
     gpu_available: bool
     message: str
 
-@app.on_event("startup")
-async def startup_event():
-    """Initialize models and engines on startup"""
-    global ASR_ENGINE, TTS_ENGINE
-    
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
     logger.info("Starting VERA application...")
     
-    try:
-        # Initialize ASR engine
-        logger.info("Loading Whisper ASR model...")
-        ASR_ENGINE = ASR(
-            model_size=config["models"]["whisper"]["model_size"],
-            device=config["models"]["whisper"]["device"],
-            compute_type=config["models"]["whisper"]["compute_type"],
-            device_index=config["models"]["whisper"]["device_index"]
-        )
-        logger.info("Whisper ASR model loaded successfully")
-        
-        # Initialize TTS engine
-        logger.info("Initializing Piper TTS engine...")
-        TTS_ENGINE = TTS(
-            binary_path=config["models"]["piper"]["binary_path"],
-            voice_dir=config["models"]["piper"]["voice_dir"],
-            default_voice=config["models"]["piper"]["default_voice"],
-            speaking_rate=config["models"]["piper"]["speaking_rate"],
-            noise_scale=config["models"]["piper"]["noise_scale"],
-            noise_w=config["models"]["piper"]["noise_w"]
-        )
-        logger.info("Piper TTS engine initialized successfully")
-        
-        logger.info("VERA application startup complete")
-        
-    except Exception as e:
-        logger.error(f"Failed to initialize engines: {e}")
-        raise
+    # Load Whisper ASR model
+    logger.info("Loading Whisper ASR model...")
+    global ASR_ENGINE
+    ASR_ENGINE = WhisperASR()
+    logger.info("Whisper ASR model loaded successfully")
+    
+    # Initialize TTS engine
+    logger.info("Initializing Piper TTS engine...")
+    global TTS_ENGINE
+    TTS_ENGINE = TTS()
+    logger.info("Piper TTS engine initialized successfully")
+    
+    logger.info("VERA application startup complete")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down VERA application...")
 
 @app.get("/")
 async def root():
