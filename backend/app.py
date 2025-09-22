@@ -40,6 +40,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting VERA application...")
+    
+    # Load Whisper ASR model
+    logger.info("Loading Whisper ASR model...")
+    global ASR_ENGINE
+    ASR_ENGINE = WhisperASR()
+    logger.info("Whisper ASR model loaded successfully")
+    
+    # Initialize TTS engine
+    logger.info("Initializing Piper TTS engine...")
+    global TTS_ENGINE
+    TTS_ENGINE = TTS()
+    logger.info("Piper TTS engine initialized successfully")
+    
+    logger.info("VERA application startup complete")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down VERA application...")
+
 app = FastAPI(
     title="VERA - Voice-Enabled Recovery Assistant",
     description="AI-powered post-discharge stroke care follow-up system",
@@ -69,32 +95,6 @@ class HealthResponse(BaseModel):
     piper_available: bool
     gpu_available: bool
     message: str
-
-from contextlib import asynccontextmanager
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
-    logger.info("Starting VERA application...")
-    
-    # Load Whisper ASR model
-    logger.info("Loading Whisper ASR model...")
-    global ASR_ENGINE
-    ASR_ENGINE = WhisperASR()
-    logger.info("Whisper ASR model loaded successfully")
-    
-    # Initialize TTS engine
-    logger.info("Initializing Piper TTS engine...")
-    global TTS_ENGINE
-    TTS_ENGINE = TTS()
-    logger.info("Piper TTS engine initialized successfully")
-    
-    logger.info("VERA application startup complete")
-    
-    yield
-    
-    # Shutdown
-    logger.info("Shutting down VERA application...")
 
 @app.get("/")
 async def root():
