@@ -76,6 +76,22 @@ class VERAApp {
         } else {
             console.error('Transcript container not found!');
         }
+        
+        // Debug progress bar elements
+        console.log('Progress bar elements:', {
+            progressFill: this.elements.progressFill,
+            progressText: this.elements.progressText,
+            progressContainer: document.querySelector('.progress-container')
+        });
+        
+        // Test progress bar update
+        if (this.elements.progressFill && this.elements.progressText) {
+            this.elements.progressFill.style.width = '25%';
+            this.elements.progressText.textContent = 'Question 1/22, 25% Complete';
+            console.log('Test progress bar update applied');
+        } else {
+            console.error('Progress bar elements not found for test update');
+        }
     }
     
     validateForm() {
@@ -223,7 +239,7 @@ class VERAApp {
                 this.transcriptVisible = true;
                 this.elements.transcriptContainer.style.display = 'block';
                 this.elements.toggleTranscript.textContent = 'Hide';
-                this.elements.transcriptMessages.innerHTML = ''; // Clear previous transcript
+                // Don't clear transcript - keep the initial message and add conversation
                 resolve();
             };
             
