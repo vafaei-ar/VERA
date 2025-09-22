@@ -71,27 +71,6 @@
                     </label>
                 </div>
 
-                <!-- Progress Bar (Visible on main page) -->
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                    <div class="progress-text" id="progressText">0% Complete</div>
-                </div>
-            </div>
-
-            <!-- Transcript Container (Visible on main page when checkbox is checked) -->
-            <div class="transcript-container" id="transcriptContainer" style="display: block;">
-                <div class="transcript-header">
-                    <h3>Live Transcript</h3>
-                </div>
-                <div class="transcript-content" id="transcriptContent">
-                    <div class="transcript-messages" id="transcriptMessages"></div>
-                    <div class="transcript-current" id="transcriptCurrent">
-                        <span class="transcript-label">Current:</span>
-                        <span class="transcript-text" id="currentTranscriptText">Listening...</span>
-                    </div>
-                </div>
             </div>
 
             <div class="call-section" id="callSection" style="display: none;">
@@ -102,6 +81,28 @@
                     <div class="status-text" id="statusText">Preparing...</div>
                     <div class="mic-meter" id="micMeter" style="display:none;">
                         <div class="mic-level" id="micLevel"></div>
+                    </div>
+                </div>
+
+                <!-- Progress Bar (Only visible during call) -->
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0% Complete</div>
+                </div>
+
+                <!-- Transcript Container (Only visible during call when checkbox is checked) -->
+                <div class="transcript-container" id="transcriptContainer" style="display: none;">
+                    <div class="transcript-header">
+                        <h3>Live Transcript</h3>
+                    </div>
+                    <div class="transcript-content" id="transcriptContent">
+                        <div class="transcript-messages" id="transcriptMessages"></div>
+                        <div class="transcript-current" id="transcriptCurrent">
+                            <span class="transcript-label">Current:</span>
+                            <span class="transcript-text" id="currentTranscriptText">Listening...</span>
+                        </div>
                     </div>
                 </div>
 

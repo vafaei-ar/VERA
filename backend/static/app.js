@@ -63,34 +63,13 @@ class VERAApp {
         // Initial form validation
         this.validateForm();
         
-        // Initialize transcript visibility based on checkbox
+        // Initialize transcript visibility based on checkbox (hidden by default on main page)
         this.transcriptVisible = this.elements.toggleTranscript.checked;
         if (this.elements.transcriptContainer) {
-            this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
+            this.elements.transcriptContainer.style.display = 'none'; // Hidden on main page
             console.log('Transcript visibility initialized:', this.transcriptVisible);
-            
-            // Add initial message to transcript
-            if (this.transcriptVisible && this.elements.transcriptMessages) {
-                this.elements.transcriptMessages.innerHTML = '<div class="transcript-message ai-question"><div class="transcript-message-header">AI: Ready</div><div class="transcript-message-text">Waiting for conversation to start...</div></div>';
-            }
         } else {
             console.error('Transcript container not found!');
-        }
-        
-        // Debug progress bar elements
-        console.log('Progress bar elements:', {
-            progressFill: this.elements.progressFill,
-            progressText: this.elements.progressText,
-            progressContainer: document.querySelector('.progress-container')
-        });
-        
-        // Test progress bar update
-        if (this.elements.progressFill && this.elements.progressText) {
-            this.elements.progressFill.style.width = '25%';
-            this.elements.progressText.textContent = 'Question 1/22, 25% Complete';
-            console.log('Test progress bar update applied');
-        } else {
-            console.error('Progress bar elements not found for test update');
         }
     }
     
@@ -235,11 +214,15 @@ class VERAApp {
             this.websocket.onopen = () => {
                 this.setStatus('Connected - Starting conversation...');
                 this.isRecording = true;
-                // Show transcript by default when call starts
-                this.transcriptVisible = true;
-                this.elements.transcriptContainer.style.display = 'block';
-                this.elements.toggleTranscript.textContent = 'Hide';
-                // Don't clear transcript - keep the initial message and add conversation
+                // Show transcript during call if checkbox was checked
+                this.transcriptVisible = this.elements.toggleTranscript.checked;
+                if (this.transcriptVisible) {
+                    this.elements.transcriptContainer.style.display = 'block';
+                    // Add initial message to transcript
+                    if (this.elements.transcriptMessages) {
+                        this.elements.transcriptMessages.innerHTML = '<div class="transcript-message ai-question"><div class="transcript-message-header">AI: Ready</div><div class="transcript-message-text">Starting conversation...</div></div>';
+                    }
+                }
                 resolve();
             };
             
