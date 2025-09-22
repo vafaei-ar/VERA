@@ -66,6 +66,7 @@ class VERAApp {
         // Initialize transcript visibility based on checkbox
         this.transcriptVisible = this.elements.toggleTranscript.checked;
         this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
+        console.log('Transcript visibility initialized:', this.transcriptVisible);
     }
     
     validateForm() {
@@ -231,6 +232,7 @@ class VERAApp {
                         } else if (message.type === 'progress_update') {
                             // Update progress bar
                             console.log('Received progress update:', message.progress);
+                            console.log('Progress data:', JSON.stringify(message.progress, null, 2));
                             this.updateProgressFromMessage(message.progress);
                         } else if (message.type === 'transcript_update') {
                             // Update live transcript
@@ -570,11 +572,29 @@ class VERAApp {
         const currentQuestion = progress.answered_questions + 1;
         const totalQuestions = progress.total_questions;
         
+        console.log('Updating progress bar elements:', {
+            progressFill: this.elements.progressFill,
+            progressText: this.elements.progressText,
+            percent: percent,
+            currentQuestion: currentQuestion,
+            totalQuestions: totalQuestions
+        });
+        
         // Update progress bar
-        this.elements.progressFill.style.width = `${percent}%`;
+        if (this.elements.progressFill) {
+            this.elements.progressFill.style.width = `${percent}%`;
+            console.log(`Set progress bar width to: ${percent}%`);
+        } else {
+            console.error('Progress fill element not found!');
+        }
         
         // Update progress text with detailed format
-        this.elements.progressText.textContent = `Question ${currentQuestion}/${totalQuestions}, ${percent}% Complete`;
+        if (this.elements.progressText) {
+            this.elements.progressText.textContent = `Question ${currentQuestion}/${totalQuestions}, ${percent}% Complete`;
+            console.log(`Set progress text to: Question ${currentQuestion}/${totalQuestions}, ${percent}% Complete`);
+        } else {
+            console.error('Progress text element not found!');
+        }
         
         // Log progress details for debugging
         console.log(`Progress update: Question ${currentQuestion}/${totalQuestions}, ${percent}% (${progress.answered_questions} answered)`);

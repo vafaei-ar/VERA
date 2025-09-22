@@ -45,9 +45,9 @@
                 <div class="form-group">
                     <label for="voiceRate">Speed:</label>
                     <select id="voiceRate" class="form-control">
-                        <option value="0.85">Fast</option>
-                        <option value="1.0" selected>Normal</option>
-                        <option value="1.15">Slow</option>
+                        <option value="0.57" selected>Fast</option>
+                        <option value="0.67">Normal</option>
+                        <option value="0.77">Slow</option>
                     </select>
                 </div>
 
@@ -72,6 +72,20 @@
                 </div>
             </div>
 
+            <!-- Transcript Container (Visible on main page when checkbox is checked) -->
+            <div class="transcript-container" id="transcriptContainer" style="display: none;">
+                <div class="transcript-header">
+                    <h3>Live Transcript</h3>
+                </div>
+                <div class="transcript-content" id="transcriptContent">
+                    <div class="transcript-messages" id="transcriptMessages"></div>
+                    <div class="transcript-current" id="transcriptCurrent">
+                        <span class="transcript-label">Current:</span>
+                        <span class="transcript-text" id="currentTranscriptText">Listening...</span>
+                    </div>
+                </div>
+            </div>
+
             <div class="call-section" id="callSection" style="display: none;">
                 <div class="status-container">
                     <div class="status-indicator" id="statusIndicator">
@@ -90,18 +104,6 @@
                     <div class="progress-text" id="progressText">0% Complete</div>
                 </div>
 
-                <div class="transcript-container" id="transcriptContainer" style="display: none;">
-                    <div class="transcript-header">
-                        <h3>Live Transcript</h3>
-                    </div>
-                    <div class="transcript-content" id="transcriptContent">
-                        <div class="transcript-messages" id="transcriptMessages"></div>
-                        <div class="transcript-current" id="transcriptCurrent">
-                            <span class="transcript-label">Current:</span>
-                            <span class="transcript-text" id="currentTranscriptText">Listening...</span>
-                        </div>
-                    </div>
-                </div>
 
                 <div class="controls">
                     <button id="endCallBtn" class="btn btn-secondary">
