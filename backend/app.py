@@ -50,7 +50,7 @@ async def lifespan(app: FastAPI):
     # Load Whisper ASR model
     logger.info("Loading Whisper ASR model...")
     global ASR_ENGINE
-    ASR_ENGINE = WhisperASR()
+    ASR_ENGINE = ASR()
     logger.info("Whisper ASR model loaded successfully")
     
     # Initialize TTS engine
