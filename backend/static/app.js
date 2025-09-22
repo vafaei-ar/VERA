@@ -65,8 +65,17 @@ class VERAApp {
         
         // Initialize transcript visibility based on checkbox
         this.transcriptVisible = this.elements.toggleTranscript.checked;
-        this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
-        console.log('Transcript visibility initialized:', this.transcriptVisible);
+        if (this.elements.transcriptContainer) {
+            this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
+            console.log('Transcript visibility initialized:', this.transcriptVisible);
+            
+            // Add initial message to transcript
+            if (this.transcriptVisible && this.elements.transcriptMessages) {
+                this.elements.transcriptMessages.innerHTML = '<div class="transcript-message ai-question"><div class="transcript-message-header">AI: Ready</div><div class="transcript-message-text">Waiting for conversation to start...</div></div>';
+            }
+        } else {
+            console.error('Transcript container not found!');
+        }
     }
     
     validateForm() {

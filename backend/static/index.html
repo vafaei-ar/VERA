@@ -70,10 +70,18 @@
                         Show Live Transcript
                     </label>
                 </div>
+
+                <!-- Progress Bar (Visible on main page) -->
+                <div class="progress-container">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progressFill"></div>
+                    </div>
+                    <div class="progress-text" id="progressText">0% Complete</div>
+                </div>
             </div>
 
             <!-- Transcript Container (Visible on main page when checkbox is checked) -->
-            <div class="transcript-container" id="transcriptContainer" style="display: none;">
+            <div class="transcript-container" id="transcriptContainer" style="display: block;">
                 <div class="transcript-header">
                     <h3>Live Transcript</h3>
                 </div>
@@ -96,14 +104,6 @@
                         <div class="mic-level" id="micLevel"></div>
                     </div>
                 </div>
-
-                <div class="progress-container">
-                    <div class="progress-bar">
-                        <div class="progress-fill" id="progressFill"></div>
-                    </div>
-                    <div class="progress-text" id="progressText">0% Complete</div>
-                </div>
-
 
                 <div class="controls">
                     <button id="endCallBtn" class="btn btn-secondary">
