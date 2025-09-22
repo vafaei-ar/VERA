@@ -43,12 +43,13 @@ class Dialog:
         self.wrapup_text = ""
         self.finished = False
         self.consent_given = False
+        self._reprompt_text: Optional[str] = None
         
         # Timeout tracking for question repetition
         self.question_start_time = None
-        self.question_timeout_seconds = 10
+        self.question_timeout_seconds = 20  # Increased from 10 to 20 seconds
         self.question_repeat_count = 0
-        self.max_repeats = 2  # Maximum number of times to repeat a question
+        self.max_repeats = 1  # Reduced from 2 to 1 to avoid too many repetitions
         
         # Initialize wrapup text
         if "wrapup" in self.scenario:
@@ -86,8 +87,8 @@ class Dialog:
         self.question_repeat_count += 1
         self.question_start_time = time.time()  # Reset timer
         
-        # Add timeout message to the current prompt
-        timeout_message = f"I didn't hear a clear response. Let me repeat the question: {self.last_prompt_text}"
+        # More gentle timeout message
+        timeout_message = f"I didn't hear a response. Let me repeat: {self.last_prompt_text}"
         logger.info(f"Repeating question {self.question_repeat_count}/{self.max_repeats}: {self.current_key}")
         return timeout_message
     
@@ -209,6 +210,7 @@ class Dialog:
         
         text = text.strip()
         logger.info(f"Answer for {self.current_key}: '{text}'")
+        logger.info(f"Dialog state before answer - finished: {self.finished}, consent_given: {self.consent_given}")
         
         # Reset question timer since we received an answer
         self.question_start_time = None
@@ -217,13 +219,12 @@ class Dialog:
         # Handle different question types
         if self.current_type == "confirm":
             self._handle_confirm_answer(text)
-            # If this was consent and given, immediately advance to next prompt
-            if self.current_key == "consent" and self.consent_given:
-                # nothing else to do here; next_prompt() will be called by caller
-                pass
         else:
             # For "free" type and others, just store the answer
             self.responses[self.current_key] = text
+            logger.info(f"Stored free-form answer for {self.current_key}")
+        
+        logger.info(f"Dialog state after answer - finished: {self.finished}, consent_given: {self.consent_given}")
     
     def _handle_confirm_answer(self, text: str):
         """Handle confirmation/yes-no type answers"""
@@ -240,31 +241,43 @@ class Dialog:
         is_deny = short_deny or bool(DENY_REGEX.search(norm))
         
         if self.current_key == "consent":
+            # Default: stay on consent until clear yes/no
+            self._reprompt_text = None
+            logger.info(f"Processing consent answer: '{text}' - is_affirm: {is_affirm}, is_deny: {is_deny}")
+            
             if is_deny:
-                # Handle consent denial
+                # Consent denied: finish immediately with on_deny message if present
                 self.consent_given = False
-                flow = self.scenario["flow"]
-                if "consent" in flow:
-                    self.current_key = flow["consent"].get("next", "name")
-                else:
-                    self.current_key = "name"
+                on_deny_msg = None
+                try:
+                    flow = self.scenario.get("flow", [])
+                    for step in flow:
+                        if step.get("key") == "consent":
+                            on_deny_msg = step.get("on_deny")
+                            break
+                except Exception:
+                    on_deny_msg = None
+                if on_deny_msg:
+                    self.wrapup_text = on_deny_msg
+                self.finished = True
+                logger.info("Consent denied - ending session")
             elif is_affirm:
-                # Handle consent affirmation
+                # Consent affirmed: proceed; next_prompt() will advance
                 self.consent_given = True
-                flow = self.scenario["flow"]
-                if "consent" in flow:
-                    self.current_key = flow["consent"].get("next", "name")
-                else:
-                    self.current_key = "name"
+                logger.info("Consent affirmed - proceeding with assessment")
             else:
-                # Unclear response - re-prompt for consent
-                logger.info(f"Unclear consent response: '{text}' - re-prompting")
-                # Don't change current_key, will re-prompt
+                # Unclear response: set reprompt text and keep current_key
+                logger.info(f"Unclear consent response: '{text}' - re-prompting consent")
+                self._reprompt_text = "Please answer yes or no. Do you consent to proceed with this recorded call?"
+                # restart timer to avoid immediate timeout repeat
+                self.start_question_timer()
+                logger.info("Restarted question timer for consent reprompt")
         else:
-            # For other confirm questions, just proceed
-            flow = self.scenario["flow"]
-            if self.current_key in flow:
-                self.current_key = flow[self.current_key].get("next", "name")
+            # Other confirm questions: only proceed on clear yes/no; unclear -> reprompt
+            self._reprompt_text = None
+            if not (is_affirm or is_deny):
+                self._reprompt_text = f"Please answer yes or no. {self.last_prompt_text}"
+                self.start_question_timer()
     
     def get_current_question(self) -> Optional[Dict]:
         """Get information about the current question"""
@@ -299,6 +312,12 @@ class Dialog:
             "finished": self.finished,
             "consent_given": self.consent_given
         }
+
+    def get_and_clear_reprompt(self) -> Optional[str]:
+        """Return reprompt text if any, and clear it."""
+        text = self._reprompt_text
+        self._reprompt_text = None
+        return text
     
     def get_scenario_info(self) -> Dict[str, Any]:
         """Get information about the loaded scenario"""

@@ -62,6 +62,14 @@
                     <span class="btn-icon">🎙️</span>
                     Start Call
                 </button>
+
+                <div class="form-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="toggleTranscript" checked>
+                        <span class="checkmark"></span>
+                        Show Live Transcript
+                    </label>
+                </div>
             </div>
 
             <div class="call-section" id="callSection" style="display: none;">
@@ -80,6 +88,19 @@
                         <div class="progress-fill" id="progressFill"></div>
                     </div>
                     <div class="progress-text" id="progressText">0% Complete</div>
+                </div>
+
+                <div class="transcript-container" id="transcriptContainer" style="display: none;">
+                    <div class="transcript-header">
+                        <h3>Live Transcript</h3>
+                    </div>
+                    <div class="transcript-content" id="transcriptContent">
+                        <div class="transcript-messages" id="transcriptMessages"></div>
+                        <div class="transcript-current" id="transcriptCurrent">
+                            <span class="transcript-label">Current:</span>
+                            <span class="transcript-text" id="currentTranscriptText">Listening...</span>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="controls">

@@ -13,7 +13,7 @@ class StreamingVAD:
         self, 
         sample_rate: int = 16000,
         frame_length_ms: int = 30,
-        energy_threshold: float = 200.0,
+        energy_threshold: float = 5.0,
         silence_duration_ms: int = 900,
         vad_type: str = "energy",
         max_speech_duration_ms: int = 15000,
@@ -83,7 +83,7 @@ class StreamingVAD:
                 # Speech started
                 self.in_speech = True
                 self.speech_started = True
-                logger.info("Speech detected - starting utterance")
+                logger.info(f"Speech detected - starting utterance (frame {self.total_frames})")
             
             # Reset silence counter
             self.silence_duration = 0
@@ -100,6 +100,10 @@ class StreamingVAD:
             if self.in_speech:
                 # We're in speech but this frame is silent
                 self.silence_duration += self.frame_length_ms
+                
+                # Log progress every 500ms of silence
+                if self.silence_duration % 500 == 0 and self.silence_duration > 0:
+                    logger.debug(f"Silence duration: {self.silence_duration}ms (threshold: {self.silence_duration_ms}ms)")
                 
                 if self.silence_duration >= self.silence_duration_ms:
                     # End of utterance
@@ -129,11 +133,17 @@ class StreamingVAD:
         # Compute mean absolute energy on int16 scale for robustness
         energy_int16 = np.mean(np.abs((audio_np * 32768.0).astype(np.int16))).item()
         
-        # Debug logging every 50 frames to see what's happening
-        if self.total_frames % 50 == 0:
-            logger.info(f"VAD energy: {energy_int16:.1f} (threshold: {self.energy_threshold}) - Speech: {energy_int16 > self.energy_threshold}")
+        # Debug logging every 100 frames to see what's happening (reduced frequency)
+        if self.total_frames % 100 == 0:
+            logger.debug(f"VAD energy: {energy_int16:.1f} (threshold: {self.energy_threshold}) - Speech: {energy_int16 > self.energy_threshold}")
         
-        return energy_int16 > self.energy_threshold
+        # Add some hysteresis to prevent rapid on/off switching
+        if self.in_speech:
+            # Use slightly lower threshold when already in speech to avoid cutting off
+            return energy_int16 > (self.energy_threshold * 0.7)
+        else:
+            # Use normal threshold when not in speech
+            return energy_int16 > self.energy_threshold
     
     def _silero_detect_speech(self, audio_np: np.ndarray) -> bool:
         """Silero VAD-based speech detection"""
@@ -167,6 +177,14 @@ class StreamingVAD:
         self.speech_started = False
         self.speech_duration = 0
         # Note: we don't clear audio_buffer here as it's managed externally
+    
+    def reset_for_new_question(self):
+        """Reset VAD state when starting a new question"""
+        logger.info("Resetting VAD state for new question")
+        self._reset_state()
+        self.in_speech = False
+        self.audio_buffer.clear()
+        self.total_frames = 0
     
     def get_collected_audio(self) -> bytes:
         """Get all collected audio data"""

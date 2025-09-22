@@ -26,8 +26,8 @@ vad:
   type: "energy"  # energy, silero
   sample_rate: 16000
   frame_length_ms: 30
-  energy_threshold: 5.0  # tuned for int16 energy metric used by the streaming VAD
-  silence_duration_ms: 900  # how long to wait before finalizing utterance
+  energy_threshold: 3.0  # lowered for better sensitivity to quiet speech
+  silence_duration_ms: 2500  # increased to give more time to respond
   max_speech_duration_ms: 15000  # force finalize after 15s of speech
   
   # Silero VAD settings (when type=silero)

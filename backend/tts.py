@@ -81,11 +81,12 @@ class TTS:
             WAV audio data as bytes
         """
         if not text or not text.strip():
+            logger.warning("Empty text provided to TTS synthesis")
             return b""
         
         voice_name = voice or self.default_voice
         
-        # Get voice info
+        # Get voice info with better error handling
         if voice_name not in self._voice_cache:
             logger.warning(f"Voice {voice_name} not found, using default")
             voice_name = self.default_voice
@@ -96,15 +97,22 @@ class TTS:
                     voice_name = available[0]
                     logger.warning(f"Default voice not found, using {voice_name}")
                 else:
-                    raise RuntimeError("No voices available")
+                    raise RuntimeError("No voices available for TTS synthesis")
         
         voice_info = self._voice_cache[voice_name]
         
-        # Get synthesis parameters
-        length_scale = kwargs.get("speaking_rate", self.speaking_rate)
-        noise_scale = kwargs.get("noise_scale", self.noise_scale)
-        noise_w = kwargs.get("noise_w", self.noise_w)
+        # Validate voice files exist
+        if not os.path.exists(voice_info["model_path"]):
+            raise RuntimeError(f"Voice model file not found: {voice_info['model_path']}")
+        if not os.path.exists(voice_info["config_path"]):
+            raise RuntimeError(f"Voice config file not found: {voice_info['config_path']}")
         
+        # Get synthesis parameters with validation
+        length_scale = max(0.1, min(3.0, kwargs.get("speaking_rate", self.speaking_rate)))
+        noise_scale = max(0.0, min(2.0, kwargs.get("noise_scale", self.noise_scale)))
+        noise_w = max(0.0, min(2.0, kwargs.get("noise_w", self.noise_w)))
+        
+        temp_wav_path = None
         try:
             # Create temporary output file
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_wav:
@@ -127,40 +135,88 @@ class TTS:
                 cmd.extend(["--speaker", str(speaker_id)])
             
             logger.debug(f"Running TTS command: {' '.join(cmd)}")
+            logger.info(f"Synthesizing text: '{text[:50]}{'...' if len(text) > 50 else ''}'")
             
-            # Run piper
+            # Run piper with better error handling
             result = subprocess.run(
                 cmd,
                 input=text.encode('utf-8'),
                 capture_output=True,
-                timeout=30  # 30 second timeout
+                timeout=60  # Increased timeout to 60 seconds
             )
             
             if result.returncode != 0:
                 error_msg = result.stderr.decode('utf-8', errors='ignore')
-                logger.error(f"Piper TTS failed: {error_msg}")
-                raise RuntimeError(f"TTS synthesis failed: {error_msg}")
+                stdout_msg = result.stdout.decode('utf-8', errors='ignore')
+                logger.error(f"Piper TTS failed with return code {result.returncode}")
+                logger.error(f"STDERR: {error_msg}")
+                logger.error(f"STDOUT: {stdout_msg}")
+                raise RuntimeError(f"TTS synthesis failed: {error_msg or 'Unknown error'}")
+            
+            # Validate output file was created and has content
+            if not os.path.exists(temp_wav_path):
+                raise RuntimeError("TTS synthesis failed: No output file generated")
+            
+            file_size = os.path.getsize(temp_wav_path)
+            if file_size == 0:
+                raise RuntimeError("TTS synthesis failed: Empty output file generated")
             
             # Read the generated audio
             with open(temp_wav_path, 'rb') as f:
                 audio_data = f.read()
             
-            # Clean up
-            os.unlink(temp_wav_path)
+            # Validate audio data
+            if len(audio_data) == 0:
+                raise RuntimeError("TTS synthesis failed: No audio data generated")
             
-            logger.debug(f"Synthesized {len(text)} characters to {len(audio_data)} bytes")
+            # Comprehensive WAV header validation
+            if not audio_data.startswith(b'RIFF') or b'WAVE' not in audio_data[:12]:
+                logger.warning("Generated audio may not be valid WAV format")
+            
+            # Validate WAV file structure
+            try:
+                import struct
+                if len(audio_data) >= 44:  # Minimum WAV header size
+                    # Check file size matches header
+                    file_size = struct.unpack('<I', audio_data[4:8])[0]
+                    if file_size + 8 != len(audio_data):
+                        logger.warning(f"WAV file size mismatch: header says {file_size + 8}, actual {len(audio_data)}")
+                    
+                    # Check sample rate
+                    sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+                    if sample_rate not in [16000, 22050, 44100, 48000]:
+                        logger.warning(f"Unexpected sample rate: {sample_rate}")
+                    
+                    # Check data chunk
+                    data_size = struct.unpack('<I', audio_data[40:44])[0]
+                    if data_size == 0:
+                        logger.warning("WAV file has no audio data")
+                    
+            except Exception as e:
+                logger.warning(f"WAV validation error: {e}")
+            
+            logger.info(f"Successfully synthesized {len(text)} characters to {len(audio_data)} bytes")
             return audio_data
             
         except subprocess.TimeoutExpired:
-            logger.error("TTS synthesis timed out")
-            if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
-                os.unlink(temp_wav_path)
-            raise RuntimeError("TTS synthesis timed out")
+            logger.error(f"TTS synthesis timed out after 60 seconds for text: '{text[:50]}...'")
+            raise RuntimeError("TTS synthesis timed out - text may be too long or system overloaded")
+        except FileNotFoundError as e:
+            logger.error(f"Required file not found during TTS synthesis: {e}")
+            raise RuntimeError(f"TTS synthesis failed: Missing required file - {e}")
+        except PermissionError as e:
+            logger.error(f"Permission denied during TTS synthesis: {e}")
+            raise RuntimeError(f"TTS synthesis failed: Permission denied - {e}")
         except Exception as e:
-            logger.error(f"TTS synthesis error: {e}")
-            if 'temp_wav_path' in locals() and os.path.exists(temp_wav_path):
-                os.unlink(temp_wav_path)
-            raise
+            logger.error(f"Unexpected TTS synthesis error: {e}")
+            raise RuntimeError(f"TTS synthesis failed: {str(e)}")
+        finally:
+            # Clean up temporary file
+            if temp_wav_path and os.path.exists(temp_wav_path):
+                try:
+                    os.unlink(temp_wav_path)
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to clean up temporary file {temp_wav_path}: {cleanup_error}")
     
     def synthesize_to_file(self, text: str, output_path: Union[str, Path], 
                           voice: Optional[str] = None, **kwargs) -> bool:
@@ -239,6 +295,43 @@ class TTS:
         chars_per_second /= self.speaking_rate  # Adjust for rate
         
         return len(text) / chars_per_second
+    
+    def get_audio_duration(self, audio_data: bytes) -> float:
+        """
+        Get the actual duration of WAV audio data in seconds
+        
+        Args:
+            audio_data: WAV audio data as bytes
+            
+        Returns:
+            Duration in seconds, or 0.0 if unable to determine
+        """
+        try:
+            import struct
+            
+            if len(audio_data) < 44:  # Minimum WAV header size
+                return 0.0
+            
+            # Check for WAV header
+            if not (audio_data.startswith(b'RIFF') and b'WAVE' in audio_data[:12]):
+                return 0.0
+            
+            # Extract sample rate and number of samples from WAV header
+            # Sample rate is at offset 24-27 (little endian)
+            sample_rate = struct.unpack('<I', audio_data[24:28])[0]
+            
+            # Data size is at offset 40-43 (little endian)
+            data_size = struct.unpack('<I', audio_data[40:44])[0]
+            
+            # Assuming 16-bit mono audio (2 bytes per sample)
+            num_samples = data_size // 2
+            duration = num_samples / sample_rate
+            
+            return duration
+            
+        except Exception as e:
+            logger.warning(f"Failed to calculate audio duration: {e}")
+            return 0.0
     
     def get_system_info(self) -> Dict:
         """Get TTS system information"""

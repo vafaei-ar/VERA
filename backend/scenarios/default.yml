@@ -11,7 +11,7 @@ greeting:
     I understand you recently had an ischemic stroke and received care at {site}.
     I'm going to ask a few questions to see how you're doing after discharge.
     I can't answer questions during this call, but I'll record additional requests at the end.
-    With your consent, this call will be recorded for care documentation. Do you consent to proceed?
+    With your consent, this call will be recorded for care documentation. 
   variables:
     - timeofday     # computed: morning/afternoon/evening
     - honorific     # UI input: "Mr." or "Ms."

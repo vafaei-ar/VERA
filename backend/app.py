@@ -1,4 +1,5 @@
 import os
+import asyncio
 import uuid
 import time
 import json
@@ -128,13 +129,38 @@ async def health_check() -> HealthResponse:
     except ImportError:
         pass
     
-    status = "healthy" if whisper_loaded and piper_available else "degraded"
+    # Test TTS functionality if available
+    tts_working = False
+    if piper_available:
+        try:
+            test_audio = TTS_ENGINE.synthesize("test", voice=None)
+            tts_working = len(test_audio) > 0
+        except Exception as e:
+            logger.warning(f"TTS health check failed: {e}")
+    
+    # Test ASR functionality if available
+    asr_working = False
+    if whisper_loaded:
+        try:
+            # Create a small test audio buffer (silence)
+            import numpy as np
+            test_audio = np.zeros(1600, dtype=np.int16).tobytes()  # 0.1s of silence
+            text, confidence = ASR_ENGINE.transcribe(test_audio)
+            asr_working = True  # If no exception, ASR is working
+        except Exception as e:
+            logger.warning(f"ASR health check failed: {e}")
+    
+    status = "healthy" if whisper_loaded and piper_available and tts_working else "degraded"
     message = "All systems operational"
     
     if not whisper_loaded:
         message = "Whisper ASR not loaded"
     elif not piper_available:
         message = "Piper TTS not available"
+    elif not tts_working:
+        message = "TTS synthesis not working"
+    elif not asr_working:
+        message = "ASR transcription not working"
     
     return HealthResponse(
         status=status,
@@ -228,23 +254,97 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
     # Send initial greeting
     try:
         greeting_audio = TTS_ENGINE.synthesize(dialog.last_prompt_text, voice=voice, speaking_rate=rate)
+        
+        # Validate audio data before sending
+        if len(greeting_audio) == 0:
+            raise RuntimeError("Generated greeting audio is empty")
+        
+        # Validate WAV header
+        if not greeting_audio.startswith(b'RIFF') or b'WAVE' not in greeting_audio[:12]:
+            logger.warning(f"Session {session_id}: Generated greeting audio may not be valid WAV format")
+        
         await websocket.send_bytes(greeting_audio)
-        logger.info(f"Session {session_id}: Sent greeting audio")
+        logger.info(f"Session {session_id}: Sent greeting audio ({len(greeting_audio)} bytes)")
+        
+        # Send greeting to transcript
+        greeting_message = {
+            "type": "ai_question",
+            "text": dialog.last_prompt_text,
+            "question_key": "greeting"
+        }
+        await websocket.send_text(json.dumps(greeting_message))
+        logger.info(f"Session {session_id}: Sent greeting to transcript")
+        
+        # Calculate actual audio duration for proper timing
+        greeting_duration = TTS_ENGINE.get_audio_duration(greeting_audio)
+        if greeting_duration > 0:
+            logger.info(f"Session {session_id}: Greeting duration: {greeting_duration:.2f}s")
+        else:
+            # Fallback to estimation if duration calculation fails
+            greeting_duration = TTS_ENGINE.estimate_duration(dialog.last_prompt_text, voice=voice)
+            logger.info(f"Session {session_id}: Greeting duration (estimated): {greeting_duration:.2f}s")
     except Exception as e:
         logger.error(f"Session {session_id}: Failed to send greeting: {e}")
         await websocket.close(code=1011, reason="TTS error")
         return
+
+    # Wait for greeting to complete before sending first prompt
+    try:
+        # Wait for greeting audio to finish playing (add grace period)
+        await asyncio.sleep(max(0.5, greeting_duration + 1.0))  # Increased grace period
+        
+        # Send initial progress update (0% at start)
+        progress = dialog.get_progress()
+        progress_message = {
+            "type": "progress_update",
+            "progress": progress
+        }
+        await websocket.send_text(json.dumps(progress_message))
+        logger.info(f"Session {session_id}: Sent initial progress update: {progress['progress_percent']:.1f}% (Q{progress['answered_questions']+1}/{progress['total_questions']})")
+        
+        first_prompt = dialog.next_prompt()
+        if first_prompt:
+            # Send AI question to transcript
+            ai_question_message = {
+                "type": "ai_question",
+                "text": first_prompt,
+                "question_key": dialog.current_key
+            }
+            await websocket.send_text(json.dumps(ai_question_message))
+            logger.info(f"Session {session_id}: Sent AI question to transcript: {dialog.current_key}")
+            
+            prompt_audio = TTS_ENGINE.synthesize(first_prompt, voice=voice, speaking_rate=rate)
+            await websocket.send_bytes(prompt_audio)
+            
+            # Calculate prompt duration and add grace period before listening
+            prompt_duration = TTS_ENGINE.get_audio_duration(prompt_audio)
+            if prompt_duration > 0:
+                logger.info(f"Session {session_id}: Sent first prompt ({prompt_duration:.2f}s)")
+                # Add grace period after prompt before VAD starts listening
+                await asyncio.sleep(prompt_duration + 1.0)
+            else:
+                logger.info(f"Session {session_id}: Sent first prompt")
+                # Default grace period if duration calculation fails
+                await asyncio.sleep(2.0)
+    except Exception as e:
+        logger.error(f"Session {session_id}: Failed to send first prompt: {e}")
     
     # Audio processing loop
     pcm_buffer = bytearray()
+    frames_received = 0
     
     try:
         while True:
             # Receive audio frame from client
             frame_data = await websocket.receive_bytes()
+            frames_received += 1
             
             # Write to full session recording
             writer.append(frame_data)
+            
+            # Skip VAD processing for first few frames to avoid TTS audio interference
+            if frames_received < 10:  # Skip first ~300ms of audio
+                continue
             
             # Process with VAD
             speech_state = vad.accept_frame(frame_data)
@@ -258,6 +358,21 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                 pcm_buffer = pcm_buffer[-max_buffer_size:]
             
             # Check for question timeout and repeat if needed
+            # Handle explicit reprompt requests from dialog (e.g., unclear consent)
+            reprompt_text = dialog.get_and_clear_reprompt() if hasattr(dialog, 'get_and_clear_reprompt') else None
+            if reprompt_text:
+                try:
+                    reprompt_audio = TTS_ENGINE.synthesize(reprompt_text, voice=voice, speaking_rate=rate)
+                    await websocket.send_bytes(reprompt_audio)
+                    logger.info(f"Session {session_id}: Sent reprompt")
+                except Exception as e:
+                    logger.error(f"Session {session_id}: Failed to send reprompt: {e}")
+                    # Send text fallback
+                    await websocket.send_text(json.dumps({
+                        "error": "TTS Error",
+                        "message": reprompt_text
+                    }))
+
             if dialog.should_repeat_question():
                 repeat_prompt = dialog.repeat_question()
                 if repeat_prompt:
@@ -265,33 +380,28 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                     try:
                         repeat_audio = TTS_ENGINE.synthesize(repeat_prompt, voice=voice, speaking_rate=rate)
                         await websocket.send_bytes(repeat_audio)
+                        logger.info(f"Session {session_id}: Sent repeat question")
                     except Exception as e:
                         logger.error(f"Session {session_id}: Failed to send repeat: {e}")
+                        # Send text fallback
+                        await websocket.send_text(json.dumps({
+                            "error": "TTS Error", 
+                            "message": repeat_prompt
+                        }))
                 else:
-                    # Max repeats reached, move to next question
-                    logger.info(f"Session {session_id}: Max repeats reached, moving to next question")
-                    next_prompt = dialog.next_prompt()
-                    if next_prompt:
-                        try:
-                            prompt_audio = TTS_ENGINE.synthesize(next_prompt, voice=voice, speaking_rate=rate)
-                            await websocket.send_bytes(prompt_audio)
-                        except Exception as e:
-                            logger.error(f"Session {session_id}: Failed to send next prompt: {e}")
-                    else:
-                        # Conversation finished
-                        session_state["finished"] = True
-                        wrapup_audio = TTS_ENGINE.synthesize(dialog.wrapup_text, voice=voice, speaking_rate=rate)
-                        await websocket.send_bytes(wrapup_audio)
-                        break
+                    # Max repeats reached; keep waiting on the same question without auto-advancing
+                    logger.info(f"Session {session_id}: Max repeats reached; waiting for response to '{dialog.current_key}'")
             
             if speech_state == "finalize_utterance":
                 logger.info(f"Session {session_id}: Finalizing utterance")
                 logger.info(f"Session {session_id}: Buffer size: {len(pcm_buffer)} bytes")
+                logger.info(f"Session {session_id}: VAD stats: {vad.get_stats()}")
                 
                 # Transcribe the buffered audio
                 try:
+                    logger.info(f"Session {session_id}: Starting ASR transcription...")
                     text, confidence = ASR_ENGINE.transcribe(bytes(pcm_buffer))
-                    logger.info(f"Session {session_id}: Transcribed: '{text}' (confidence: {confidence:.3f})")
+                    logger.info(f"Session {session_id}: ASR completed - Text: '{text}' (confidence: {confidence:.3f})")
                     
                     # Clear buffer
                     pcm_buffer.clear()
@@ -304,33 +414,118 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                         "timestamp": time.time()
                     }
                     session_state["transcript"].append(transcript_entry)
+                    logger.info(f"Session {session_id}: Stored transcript entry for key: {dialog.current_key}")
                     
                     # Submit answer to dialog
                     logger.info(f"Session {session_id}: Submitting answer to dialog: '{text}'")
                     dialog.submit_answer(text)
+                    logger.info(f"Session {session_id}: Dialog state after answer - finished: {dialog.finished}, consent_given: {dialog.consent_given}")
                     
-                    # Get next prompt
+                    # Send progress update to frontend
+                    progress = dialog.get_progress()
+                    progress_message = {
+                        "type": "progress_update",
+                        "progress": progress
+                    }
+                    await websocket.send_text(json.dumps(progress_message))
+                    logger.info(f"Session {session_id}: Sent progress update: {progress['progress_percent']:.1f}% (Q{progress['answered_questions']+1}/{progress['total_questions']})")
+                    
+                    # Send transcript update to frontend
+                    transcript_message = {
+                        "type": "transcript_update",
+                        "text": text,
+                        "confidence": confidence,
+                        "is_final": True,
+                        "question_key": dialog.current_key
+                    }
+                    await websocket.send_text(json.dumps(transcript_message))
+                    logger.info(f"Session {session_id}: Sent transcript update: '{text}'")
+                    
+                    # Determine next step: if consent unclear, do not advance
                     logger.info(f"Session {session_id}: Getting next prompt...")
-                    next_prompt = dialog.next_prompt()
-                    logger.info(f"Session {session_id}: Next prompt result: {next_prompt}")
+                    if dialog.current_key == 'consent' and not dialog.consent_given and hasattr(dialog, 'get_and_clear_reprompt'):
+                        next_prompt = None
+                        logger.info(f"Session {session_id}: Consent unclear, staying on current question")
+                    else:
+                        next_prompt = dialog.next_prompt()
+                        logger.info(f"Session {session_id}: Next prompt result: {next_prompt}")
                     
                     if next_prompt is None:
-                        # Dialog finished
-                        logger.info(f"Session {session_id}: Dialog completed")
-                        session_state["finished"] = True
-                        writer.close()
-                        
-                        # Send wrap-up message
-                        wrapup_audio = TTS_ENGINE.synthesize(dialog.wrapup_text, voice=voice, speaking_rate=rate)
-                        await websocket.send_bytes(wrapup_audio)
-                        
-                        await websocket.close(code=1000, reason="Dialog completed")
-                        break
+                        # Only finish if dialog explicitly marked finished
+                        if dialog.finished:
+                            logger.info(f"Session {session_id}: Dialog completed")
+                            session_state["finished"] = True
+                            writer.close()
+                            
+                            # Send wrap-up message
+                            logger.info(f"Session {session_id}: Sending wrap-up message")
+                            wrapup_audio = TTS_ENGINE.synthesize(dialog.wrapup_text, voice=voice, speaking_rate=rate)
+                            await websocket.send_bytes(wrapup_audio)
+                            
+                            await websocket.close(code=1000, reason="Dialog completed")
+                            break
+                        else:
+                            # Stay on current question (e.g., unclear consent) and continue listening
+                            logger.info(f"Session {session_id}: Staying on current question, continuing to listen")
+                            continue
                     else:
                         # Send next prompt
-                        prompt_audio = TTS_ENGINE.synthesize(next_prompt, voice=voice, speaking_rate=rate)
-                        await websocket.send_bytes(prompt_audio)
-                        logger.info(f"Session {session_id}: Sent next prompt")
+                        try:
+                            logger.info(f"Session {session_id}: Synthesizing next prompt...")
+                            
+                            # Send AI question to transcript
+                            ai_question_message = {
+                                "type": "ai_question",
+                                "text": next_prompt,
+                                "question_key": dialog.current_key
+                            }
+                            await websocket.send_text(json.dumps(ai_question_message))
+                            logger.info(f"Session {session_id}: Sent AI question to transcript: {dialog.current_key}")
+                            
+                            prompt_audio = TTS_ENGINE.synthesize(next_prompt, voice=voice, speaking_rate=rate)
+                            
+                            # Validate audio data before sending
+                            if len(prompt_audio) == 0:
+                                raise RuntimeError("Generated prompt audio is empty")
+                            
+                            await websocket.send_bytes(prompt_audio)
+                            logger.info(f"Session {session_id}: Sent next prompt ({len(prompt_audio)} bytes)")
+                            
+                            # Send progress update for new question
+                            progress = dialog.get_progress()
+                            progress_message = {
+                                "type": "progress_update",
+                                "progress": progress
+                            }
+                            await websocket.send_text(json.dumps(progress_message))
+                            logger.info(f"Session {session_id}: Sent progress update for new question: {progress['progress_percent']:.1f}%")
+                            
+                            # Reset VAD for new question
+                            vad.reset_for_new_question()
+                            pcm_buffer.clear()  # Clear audio buffer for new question
+                            
+                            # Log prompt duration and add grace period
+                            prompt_duration = TTS_ENGINE.get_audio_duration(prompt_audio)
+                            if prompt_duration > 0:
+                                logger.info(f"Session {session_id}: Prompt duration: {prompt_duration:.2f}s")
+                                # Add grace period after prompt before VAD starts listening
+                                await asyncio.sleep(prompt_duration + 1.0)
+                                logger.info(f"Session {session_id}: Grace period completed, VAD now active")
+                            else:
+                                logger.info(f"Session {session_id}: Prompt duration unknown, using default grace period")
+                                # Default grace period if duration calculation fails
+                                await asyncio.sleep(2.0)
+                                logger.info(f"Session {session_id}: Default grace period completed, VAD now active")
+                        except Exception as tts_error:
+                            logger.error(f"Session {session_id}: TTS failed for next prompt: {tts_error}")
+                            # Graceful degradation: send text message instead of audio
+                            error_msg = "I'm having trouble speaking right now. Please continue with your response."
+                            await websocket.send_text(json.dumps({
+                                "type": "text_message",
+                                "message": error_msg,
+                                "prompt": next_prompt  # Include the original prompt as text
+                            }))
+                            logger.info(f"Session {session_id}: Sent text fallback for failed TTS")
                 
                 except Exception as e:
                     logger.error(f"Session {session_id}: ASR/TTS error: {e}")

@@ -11,6 +11,8 @@ class VERAApp {
         
         this.isRecording = false;
         this.currentStatus = 'idle';
+        this.transcriptVisible = false;
+        this.currentTranscript = '';
         
         // DOM elements
         this.elements = {};
@@ -30,7 +32,8 @@ class VERAApp {
             'startBtn', 'endCallBtn', 'downloadBtn', 'newCallBtn',
             'statusIndicator', 'statusText', 'progressFill', 'progressText',
             'ttsPlayer', 'healthStatus', 'healthDot', 'healthText',
-            'errorModal', 'modalClose', 'modalOk', 'errorMessage'
+            'errorModal', 'modalClose', 'modalOk', 'errorMessage',
+            'transcriptContainer', 'toggleTranscript', 'transcriptMessages', 'currentTranscriptText'
         ];
         
         elementIds.forEach(id => {
@@ -51,11 +54,18 @@ class VERAApp {
         this.elements.modalClose.addEventListener('click', () => this.hideModal());
         this.elements.modalOk.addEventListener('click', () => this.hideModal());
         
+        // Transcript toggle
+        this.elements.toggleTranscript.addEventListener('change', () => this.toggleTranscript());
+        
         // Form validation
         this.elements.patientName.addEventListener('input', () => this.validateForm());
         
         // Initial form validation
         this.validateForm();
+        
+        // Initialize transcript visibility based on checkbox
+        this.transcriptVisible = this.elements.toggleTranscript.checked;
+        this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
     }
     
     validateForm() {
@@ -172,7 +182,7 @@ class VERAApp {
                     this.updateMicLevel(msg.value);
                     return;
                 }
-                if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+                if (this.websocket && this.websocket.readyState === WebSocket.OPEN && this.isRecording) {
                     this.websocket.send(msg);
                 }
             };
@@ -199,6 +209,11 @@ class VERAApp {
             this.websocket.onopen = () => {
                 this.setStatus('Connected - Starting conversation...');
                 this.isRecording = true;
+                // Show transcript by default when call starts
+                this.transcriptVisible = true;
+                this.elements.transcriptContainer.style.display = 'block';
+                this.elements.toggleTranscript.textContent = 'Hide';
+                this.elements.transcriptMessages.innerHTML = ''; // Clear previous transcript
                 resolve();
             };
             
@@ -207,11 +222,25 @@ class VERAApp {
                     // Received TTS audio
                     this.playTTSAudio(event.data);
                 } else {
-                    // Received text message (likely error)
+                    // Received text message
                     try {
                         const message = JSON.parse(event.data);
-                        if (message.error) {
+                        if (message.type === 'text_message') {
+                            // Graceful degradation: show text message instead of audio
+                            this.showTextMessage(message.message, message.prompt);
+                        } else if (message.type === 'progress_update') {
+                            // Update progress bar
+                            console.log('Received progress update:', message.progress);
+                            this.updateProgressFromMessage(message.progress);
+                        } else if (message.type === 'transcript_update') {
+                            // Update live transcript
+                            this.addTranscriptMessage(message.text, message.confidence, message.is_final);
+                        } else if (message.type === 'ai_question') {
+                            // Add AI question to transcript
+                            this.addAIQuestion(message.text, message.question_key);
+                        } else if (message.error) {
                             console.error('Server error:', message.error);
+                            this.showError('Server error: ' + message.error);
                         }
                     } catch (e) {
                         console.log('Server message:', event.data);
@@ -253,23 +282,170 @@ class VERAApp {
     
     playTTSAudio(audioData) {
         try {
+            // Validate audio data
+            if (!audioData || audioData.byteLength === 0) {
+                console.error('Received empty or invalid audio data');
+                return;
+            }
+            
+            // Validate WAV header
+            const dataView = new DataView(audioData);
+            if (dataView.getUint32(0, true) !== 0x46464952 || // "RIFF"
+                dataView.getUint32(8, true) !== 0x45564157) {  // "WAVE"
+                console.warn('Received audio data may not be valid WAV format');
+            }
+            
+            console.log(`Playing TTS audio: ${audioData.byteLength} bytes`);
+            
             const blob = new Blob([audioData], { type: 'audio/wav' });
             const url = URL.createObjectURL(blob);
             
+            // Store previous recording state
+            const wasRecording = this.isRecording;
+            this.isRecording = false;
+            
+            // Set up audio element
             this.elements.ttsPlayer.src = url;
-            this.elements.ttsPlayer.play();
+            this.elements.ttsPlayer.volume = 1.0;
             
-            this.setStatus('AI is speaking...');
+            // Handle playback events
+            this.elements.ttsPlayer.onloadstart = () => {
+                console.log('TTS audio loading started');
+                this.setStatus('AI is speaking...');
+            };
             
-            // Clean up URL after playback
+            this.elements.ttsPlayer.oncanplay = () => {
+                console.log('TTS audio ready to play');
+            };
+            
+            this.elements.ttsPlayer.onplay = () => {
+                console.log('TTS audio playback started');
+            };
+            
+            this.elements.ttsPlayer.onpause = () => {
+                console.log('TTS audio playback paused');
+            };
+            
+            this.elements.ttsPlayer.onerror = (error) => {
+                console.error('TTS audio playback error:', error);
+                this.setStatus('Audio playback error');
+                // Clean up and resume recording
+                URL.revokeObjectURL(url);
+                this.resumeRecording(wasRecording);
+            };
+            
             this.elements.ttsPlayer.onended = () => {
+                console.log('TTS audio playback completed');
                 URL.revokeObjectURL(url);
                 this.setStatus('Listening...');
+                this.resumeRecording(wasRecording);
             };
+            
+            // Start playback
+            const playPromise = this.elements.ttsPlayer.play();
+            
+            if (playPromise !== undefined) {
+                playPromise.catch(error => {
+                    console.error('Failed to start TTS playback:', error);
+                    this.setStatus('Audio playback failed');
+                    URL.revokeObjectURL(url);
+                    this.resumeRecording(wasRecording);
+                });
+            }
             
         } catch (error) {
             console.error('Failed to play TTS audio:', error);
+            this.setStatus('Audio playback error');
         }
+    }
+    
+    resumeRecording(wasRecording) {
+        // Resume recording after TTS finishes
+        if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
+            this.isRecording = wasRecording || true;
+            console.log('Resumed audio recording');
+        }
+    }
+    
+    showTextMessage(message, prompt) {
+        // Show text message as fallback when TTS fails
+        console.log('Showing text message:', message);
+        if (prompt) {
+            console.log('Original prompt:', prompt);
+        }
+        
+        // Update status to show the message
+        this.setStatus(message);
+        
+        // You could also show this in a modal or dedicated text area
+        // For now, we'll just log it and update the status
+        setTimeout(() => {
+            this.setStatus('Listening...');
+        }, 3000); // Show message for 3 seconds then return to listening
+    }
+    
+    toggleTranscript() {
+        this.transcriptVisible = this.elements.toggleTranscript.checked;
+        this.elements.transcriptContainer.style.display = this.transcriptVisible ? 'block' : 'none';
+    }
+    
+    addAIQuestion(text, questionKey) {
+        if (!this.transcriptVisible) return;
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = 'transcript-message ai-question';
+        
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'transcript-message-header';
+        headerDiv.textContent = `AI: ${questionKey === 'greeting' ? 'Greeting' : 'Question'}`;
+        
+        const textDiv = document.createElement('div');
+        textDiv.className = 'transcript-message-text';
+        textDiv.textContent = text;
+        
+        messageDiv.appendChild(headerDiv);
+        messageDiv.appendChild(textDiv);
+        
+        this.elements.transcriptMessages.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        this.elements.transcriptMessages.scrollTop = this.elements.transcriptMessages.scrollHeight;
+    }
+    
+    addTranscriptMessage(text, confidence, isFinal = true) {
+        if (!this.transcriptVisible) return;
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `transcript-message ${isFinal ? 'final' : 'partial'}`;
+        
+        const headerDiv = document.createElement('div');
+        headerDiv.className = 'transcript-message-header';
+        headerDiv.textContent = `You: ${isFinal ? 'Final' : 'Partial'} (${Math.round(confidence * 100)}% confidence)`;
+        
+        const textDiv = document.createElement('div');
+        textDiv.className = 'transcript-message-text';
+        textDiv.textContent = text;
+        
+        messageDiv.appendChild(headerDiv);
+        messageDiv.appendChild(textDiv);
+        
+        this.elements.transcriptMessages.appendChild(messageDiv);
+        
+        // Scroll to bottom
+        this.elements.transcriptMessages.scrollTop = this.elements.transcriptMessages.scrollHeight;
+    }
+    
+    updateCurrentTranscript(text, isProcessing = false) {
+        if (!this.transcriptVisible) return;
+        
+        this.currentTranscript = text;
+        this.elements.currentTranscriptText.textContent = text || 'Listening...';
+        this.elements.currentTranscriptText.className = `transcript-text ${text ? (isProcessing ? 'processing' : '') : 'listening'}`;
+    }
+    
+    clearCurrentTranscript() {
+        this.currentTranscript = '';
+        this.updateCurrentTranscript('');
     }
     
     endCall() {
@@ -312,6 +488,10 @@ class VERAApp {
         if (this.elements.micMeter) {
             this.elements.micMeter.style.display = 'none';
         }
+        
+        // Clear transcript
+        this.elements.transcriptMessages.innerHTML = '';
+        this.clearCurrentTranscript();
     }
 
     updateMicLevel(level) {
@@ -379,8 +559,32 @@ class VERAApp {
     }
     
     updateProgress(percent) {
+        console.log(`Updating progress bar to: ${percent}%`);
         this.elements.progressFill.style.width = `${percent}%`;
         this.elements.progressText.textContent = `${Math.round(percent)}% Complete`;
+    }
+    
+    updateProgressFromMessage(progress) {
+        // Update progress bar with detailed information from backend
+        const percent = Math.round(progress.progress_percent || 0);
+        const currentQuestion = progress.answered_questions + 1;
+        const totalQuestions = progress.total_questions;
+        
+        // Update progress bar
+        this.elements.progressFill.style.width = `${percent}%`;
+        
+        // Update progress text with detailed format
+        this.elements.progressText.textContent = `Question ${currentQuestion}/${totalQuestions}, ${percent}% Complete`;
+        
+        // Log progress details for debugging
+        console.log(`Progress update: Question ${currentQuestion}/${totalQuestions}, ${percent}% (${progress.answered_questions} answered)`);
+        
+        // Update status with more detailed information
+        if (progress.finished) {
+            this.setStatus('Conversation completed');
+        } else if (progress.answered_questions > 0) {
+            this.setStatus(`Question ${currentQuestion} of ${totalQuestions}`);
+        }
     }
     
     showSection(section) {
