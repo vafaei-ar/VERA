@@ -102,6 +102,43 @@ else
     pip install fastapi uvicorn websockets faster-whisper ctranslate2 torch torchaudio numpy scipy pyyaml soundfile requests
 fi
 
+# Step 3.5: Optional TTS backend installations
+print_status "Checking for optional TTS backend installations..."
+
+# Check for Kokoro TTS
+read -p "Install Kokoro TTS backend? (requires transformers, ~500MB) (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    print_status "Installing Kokoro TTS dependencies..."
+    pip install transformers accelerate
+    print_success "Kokoro TTS backend dependencies installed"
+else
+    print_status "Skipping Kokoro TTS backend"
+fi
+
+# Check for VibeVoice TTS
+read -p "Install VibeVoice TTS backend? (requires 8GB+ VRAM, ~1.5GB) (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    print_status "Installing VibeVoice TTS dependencies..."
+    pip install transformers accelerate
+    print_success "VibeVoice TTS backend dependencies installed"
+    print_warning "VibeVoice requires significant VRAM (8GB+) and supports English/Chinese only"
+else
+    print_status "Skipping VibeVoice TTS backend"
+fi
+
+# Check for Chatterbox TTS
+read -p "Install Chatterbox TTS backend? (requires ResembleAI API key) (y/N): " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    print_status "Chatterbox TTS backend requires ResembleAI API key"
+    print_status "Set RESEMBLE_API_KEY environment variable to use this backend"
+    print_success "Chatterbox TTS backend will be available (requires API key)"
+else
+    print_status "Skipping Chatterbox TTS backend"
+fi
+
 # Step 4: Download Piper TTS binary and voices
 print_status "Downloading Piper TTS binary..."
 cd backend
@@ -128,6 +165,7 @@ print_status "Downloading Piper voices..."
 cd models/piper
 
 # Voice URLs (HuggingFace)
+# More voices can be found at https://huggingface.co/rhasspy/piper-voices/tree/main
 VOICES=(
     "en_US-amy-medium"
     "en_US-lessac-medium" 

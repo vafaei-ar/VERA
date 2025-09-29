@@ -5,14 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VERA - Voice-Enabled Recovery Assistant</title>
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css?v=20250923">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>VERA</h1>
-            <p class="subtitle">Voice-Enabled Recovery Assistant</p>
-            <p class="description">AI-powered post-discharge stroke care follow-up</p>
+            <div class="brand">
+                <img src="/static/logo.png" alt="AI Stroke Navigator" class="logo" />
+                <div class="brand-text">
+                    <h1>AI Stroke Navigator</h1>
+                    <p class="subtitle">Voice-Enabled Recovery Assistant</p>
+                    <p class="description">AI-powered post-discharge stroke care follow-up</p>
+                </div>
+            </div>
         </header>
 
         <main>
@@ -33,14 +38,7 @@
                     <input type="text" id="patientName" class="form-control" placeholder="Patient name" required>
                 </div>
 
-                <div class="form-group">
-                    <label for="voiceSelect">Voice:</label>
-                    <select id="voiceSelect" class="form-control">
-                        <option value="en_US-amy-medium">Amy (Female, Medium Quality)</option>
-                        <option value="en_US-lessac-medium">Lessac (Female, Medium Quality)</option>
-                        <option value="en_US-ryan-high">Ryan (Male, High Quality)</option>
-                    </select>
-                </div>
+                
 
                 <div class="form-group">
                     <label for="voiceRate">Speed:</label>
@@ -64,10 +62,10 @@
                 </button>
 
                 <div class="form-group">
-                    <label class="checkbox-label">
+                    <label class="switch">
                         <input type="checkbox" id="toggleTranscript" checked>
-                        <span class="checkmark"></span>
-                        Show Live Transcript
+                        <span class="slider"></span>
+                        <span class="switch-text">Show Live Transcript</span>
                     </label>
                 </div>
 
@@ -167,7 +165,7 @@
         </div>
     </div>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=20250923"></script>
 </body>
 </html>
 

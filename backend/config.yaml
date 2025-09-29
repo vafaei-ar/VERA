@@ -3,6 +3,13 @@ app:
   port: 8000
   debug: true
 
+tts:
+  backend: "kokoro"  # piper | kokoro | vibevoice | chatterbox
+  precompile_on_start: true  # pre-synthesize scenario prompts at startup
+  cache_audio: true           # keep synthesized audio in memory cache
+  voice: null                 # optional default voice for precompile (falls back to model default)
+  speaking_rate: 1.0          # optional speaking rate for precompile
+
 models:
   whisper:
     model_size: "large-v3"  # medium.en, large-v2, large-v3
@@ -13,26 +20,53 @@ models:
   piper:
     binary_path: "./piper/piper"
     voice_dir: "./models/piper"
-    default_voice: "en_US-amy-medium"  # will be selectable at runtime
+    default_voice: "en_US-ryan-high"  # will be selectable at runtime
     available_voices:
       - "en_US-amy-medium"
       - "en_US-lessac-medium"
-      - "en_US-libritts-high"
+      - "en_US-ryan-high"
     speaking_rate: 1.0  # phoneme length scale
     noise_scale: 0.667
     noise_w: 0.8
+
+  kokoro:
+    model: "onnx-community/Kokoro-82M-ONNX"  # ONNX model ID
+    default_voice: "af_sky"  # Default American Female voice
+    available_voices:
+      - "af"           # Default American Female
+      - "af_bella"     # Bella - American Female
+      - "af_nicole"    # Nicole - American Female
+      - "af_sarah"     # Sarah - American Female
+      - "af_sky"       # Sky - American Female
+      - "am_adam"      # Adam - American Male
+      - "am_michael"   # Michael - American Male
+      - "bf_emma"      # Emma - British Female
+      - "bf_isabella"  # Isabella - British Female
+      - "bm_george"    # George - British Male
+      - "bm_lewis"     # Lewis - British Male
+
+  vibevoice:
+    model: "microsoft/VibeVoice-1.5B"  # Hugging Face model ID
+    device: "auto"  # auto, cpu, cuda
+    torch_dtype: "auto"  # auto, float16, float32
+    # Note: VibeVoice requires 8GB+ VRAM and supports English/Chinese only
+
+  chatterbox:
+    api_key: null  # Set RESEMBLE_API_KEY environment variable
+    api_url: "https://api.resemble.ai/v2/projects"
+    # Note: Requires ResembleAI API key and internet connection
 
 vad:
   type: "energy"  # energy, silero
   sample_rate: 16000
   frame_length_ms: 30
   energy_threshold: 3.0  # lowered for better sensitivity to quiet speech
-  silence_duration_ms: 2500  # increased to give more time to respond
-  max_speech_duration_ms: 15000  # force finalize after 15s of speech
+  silence_duration_ms: 1500  # increased to give more time to respond
+  max_speech_duration_ms: 30000  # force finalize after 30s of speech
   
   # Silero VAD settings (when type=silero)
   silero_threshold: 0.5
-  min_speech_duration_ms: 250
+  min_speech_duration_ms: 150
   max_speech_duration_s: 30
 
 audio:

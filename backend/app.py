@@ -7,7 +7,7 @@ import zipfile
 import io
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import yaml
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
@@ -18,7 +18,8 @@ from pydantic import BaseModel
 # Import our custom modules (will implement these next)
 from dialog import Dialog
 from asr import ASR
-from tts import TTS
+from tts_backends.base import TTSBackend
+from tts_factory import create_tts_backend
 from vad import StreamingVAD
 from audio_io import WavAppendWriter
 
@@ -42,6 +43,152 @@ logger = logging.getLogger(__name__)
 
 from contextlib import asynccontextmanager
 
+# Simple in-memory cache for precompiled TTS audio
+PRECOMPILED_AUDIO: Dict[Tuple[str, float, str], bytes] = {}
+
+def _cache_key(text: str, voice: Optional[str], rate: float) -> Tuple[str, float, str]:
+    return (voice or "", float(rate or 1.0), text)
+
+def synth_cached(tts_engine: TTSBackend, text: str, voice: Optional[str], rate: float) -> bytes:
+    """Return cached audio if available; otherwise synthesize (and cache if enabled)."""
+    if not text:
+        return b""
+    key = _cache_key(text, voice, rate)
+    if PRECOMPILED_AUDIO and key in PRECOMPILED_AUDIO:
+        return PRECOMPILED_AUDIO[key]
+    audio = tts_engine.synthesize_with_metrics(text, voice=voice, speaking_rate=rate)
+    try:
+        if config.get("tts", {}).get("cache_audio", True):
+            PRECOMPILED_AUDIO[key] = audio
+    except Exception:
+        # Cache is best-effort; ignore failures
+        pass
+    return audio
+
+# -------- Pause-aware synthesis helpers --------
+def _split_text_with_pauses(text: str) -> list:
+    """Split text into a list of parts: either dicts {type:'pause', ms:int} or {type:'text', text:str}."""
+    import re
+    parts = []
+    idx = 0
+    for m in re.finditer(r"\[pause=(\d+)\]", text):
+        if m.start() > idx:
+            chunk = text[idx:m.start()].strip()
+            if chunk:
+                parts.append({"type": "text", "text": chunk})
+        try:
+            ms = int(m.group(1))
+        except Exception:
+            ms = 0
+        parts.append({"type": "pause", "ms": max(0, ms)})
+        idx = m.end()
+    if idx < len(text):
+        tail = text[idx:].strip()
+        if tail:
+            parts.append({"type": "text", "text": tail})
+    if not parts:
+        parts = [{"type": "text", "text": text}]
+    return parts
+
+def _extract_wav_pcm(wav_bytes: bytes) -> tuple[int, int, bytes]:
+    """Return (sample_rate, bytes_per_sample, pcm_bytes). Supports mono PCM16 WAV.
+    If format unexpected, raise ValueError.
+    """
+    import struct
+    if len(wav_bytes) < 44 or not wav_bytes.startswith(b"RIFF"):
+        raise ValueError("Invalid WAV data")
+    fmt_chunk_size = int.from_bytes(wav_bytes[16:20], "little")
+    audio_format = int.from_bytes(wav_bytes[20:22], "little")
+    num_channels = int.from_bytes(wav_bytes[22:24], "little")
+    sample_rate = int.from_bytes(wav_bytes[24:28], "little")
+    bits_per_sample = int.from_bytes(wav_bytes[34:36], "little")
+    # Find 'data' subchunk
+    # Minimum header up to 44 bytes, but fmt may be larger
+    offset = 12
+    data_offset = None
+    while offset + 8 <= len(wav_bytes):
+        chunk_id = wav_bytes[offset:offset+4]
+        chunk_size = int.from_bytes(wav_bytes[offset+4:offset+8], "little")
+        if chunk_id == b"data":
+            data_offset = offset + 8
+            data_size = chunk_size
+            break
+        offset += 8 + chunk_size
+    if data_offset is None:
+        # Fallback to typical header location
+        data_offset = 44
+        data_size = len(wav_bytes) - 44
+    if audio_format != 1 or num_channels != 1:
+        raise ValueError("Only PCM mono WAV supported for concat")
+    bps = bits_per_sample // 8
+    pcm = wav_bytes[data_offset:data_offset+data_size]
+    return sample_rate, bps, pcm
+
+def _build_wav(pcm_bytes: bytes, sample_rate: int, bits_per_sample: int = 16, channels: int = 1) -> bytes:
+    import struct
+    byte_rate = sample_rate * channels * bits_per_sample // 8
+    block_align = channels * bits_per_sample // 8
+    data_size = len(pcm_bytes)
+    header = struct.pack(
+        '<4sI4s4sIHHIIHH4sI',
+        b'RIFF',
+        36 + data_size,
+        b'WAVE',
+        b'fmt ',
+        16,
+        1,
+        channels,
+        sample_rate,
+        byte_rate,
+        block_align,
+        bits_per_sample,
+        b'data',
+        data_size
+    )
+    return header + pcm_bytes
+
+def _silence_pcm(duration_ms: int, sample_rate: int, bytes_per_sample: int) -> bytes:
+    num_samples = int(sample_rate * (max(0, duration_ms) / 1000.0))
+    return b"\x00" * (num_samples * bytes_per_sample)
+
+def synth_with_pauses(tts_engine: TTSBackend, text: str, voice: Optional[str], rate: float) -> bytes:
+    parts = _split_text_with_pauses(text)
+    if len(parts) == 1 and parts[0]['type'] == 'text':
+        return synth_cached(tts_engine, parts[0]['text'], voice, rate)
+    wavs: list[bytes] = []
+    for part in parts:
+        if part['type'] == 'text':
+            wavs.append(synth_cached(tts_engine, part['text'], voice, rate))
+        else:
+            # create tiny silent wav with 100ms to capture sample rate later, we'll convert to pcm
+            # we'll handle silence during concat using determined sample rate
+            wavs.append(b"")
+    # Concatenate by extracting PCM and injecting silence PCM where needed
+    base_sr = None
+    bps = None
+    pcm_acc = bytearray()
+    for part, wav in zip(parts, wavs):
+        if part['type'] == 'text':
+            sr, bytes_per_sample, pcm = _extract_wav_pcm(wav)
+            if base_sr is None:
+                base_sr = sr
+                bps = bytes_per_sample
+            elif sr != base_sr or bytes_per_sample != bps:
+                # Incompatible sample rates; fall back to plain synth
+                return synth_cached(tts_engine, text, voice, rate)
+            pcm_acc.extend(pcm)
+        else:
+            if base_sr is None:
+                # No audio yet; synthesize a tiny empty to set sample rate
+                temp = synth_cached(tts_engine, " ", voice, rate)
+                sr, bytes_per_sample, _ = _extract_wav_pcm(temp)
+                base_sr = sr
+                bps = bytes_per_sample
+            pcm_acc.extend(_silence_pcm(part['ms'], base_sr, bps))
+    if base_sr is None or bps is None:
+        return synth_cached(tts_engine, text, voice, rate)
+    return _build_wav(bytes(pcm_acc), base_sr, bits_per_sample=bps*8, channels=1)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -54,11 +201,69 @@ async def lifespan(app: FastAPI):
     logger.info("Whisper ASR model loaded successfully")
     
     # Initialize TTS engine
-    logger.info("Initializing Piper TTS engine...")
     global TTS_ENGINE
-    TTS_ENGINE = TTS()
-    logger.info("Piper TTS engine initialized successfully")
+    TTS_ENGINE = create_tts_backend(config)
+    logger.info("TTS backend initialized: %s", config.get("tts", {}).get("backend", "piper"))
     
+    # Optionally precompile voices for default scenario
+    try:
+        tts_cfg = config.get("tts", {})
+        if tts_cfg.get("precompile_on_start", False):
+            scenario_file = config.get("session", {}).get("default_scenario", "default.yml")
+            scenario_path = Path(__file__).parent / "scenarios" / scenario_file
+            # Build greeting via Dialog to resolve variables
+            dialog = Dialog(
+                scenario_path=str(scenario_path),
+                honorific="Mr.",
+                patient_name="Patient"
+            )
+            voice = tts_cfg.get("voice")
+            rate = float(tts_cfg.get("speaking_rate", 1.0))
+
+            texts_to_compile = []
+            # Greeting
+            try:
+                texts_to_compile.append(dialog.build_greeting())
+            except Exception as e:
+                logger.warning(f"Precompile: failed to build greeting: {e}")
+
+            # Load YAML to collect prompts and wrapup
+            with open(scenario_path, "r", encoding="utf-8") as f:
+                scenario_yaml = yaml.safe_load(f)
+            for item in scenario_yaml.get("flow", []) or []:
+                if isinstance(item, dict) and "prompt" in item:
+                    p = item.get("prompt")
+                    if isinstance(p, str) and p.strip():
+                        texts_to_compile.append(p.strip())
+            wrapup_msg = (scenario_yaml.get("wrapup") or {}).get("message")
+            if isinstance(wrapup_msg, str) and wrapup_msg.strip():
+                texts_to_compile.append(wrapup_msg.strip())
+
+            # Deduplicate while preserving order
+            seen = set()
+            deduped = []
+            for t in texts_to_compile:
+                if t not in seen:
+                    seen.add(t)
+                    deduped.append(t)
+
+            compiled = 0
+            for text in deduped:
+                try:
+                    audio = TTS_ENGINE.synthesize_with_metrics(text, voice=voice, speaking_rate=rate)
+                    if tts_cfg.get("cache_audio", True):
+                        PRECOMPILED_AUDIO[_cache_key(text, voice, rate)] = audio
+                    compiled += 1
+                except Exception as e:
+                    snippet = (text or "")[:80].replace("\n", " ")
+                    logger.warning(
+                        f"Precompile: failed for voice={voice or 'default'} text_len={len(text)} snippet='{snippet}' error={e}"
+                    )
+
+            logger.info(f"Precompile complete: cached {compiled}/{len(deduped)} utterances for scenario '{scenario_file}'")
+    except Exception as e:
+        logger.warning(f"Precompile step skipped due to error: {e}")
+
     logger.info("VERA application startup complete")
     
     yield
@@ -80,12 +285,13 @@ app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 # Global instances - will be initialized on startup
 SESSIONS: Dict[str, dict] = {}
 ASR_ENGINE: Optional[ASR] = None
-TTS_ENGINE: Optional[TTS] = None
+TTS_ENGINE: Optional[TTSBackend] = None
 
 class StartRequest(BaseModel):
     honorific: str = "Mr."
     patient_name: str = "Patient"
     scenario: str = "default.yml"
+    backend: Optional[str] = None
     voice: Optional[str] = None  # Allow runtime voice selection
     rate: float = 1.0  # TTS speaking rate
 
@@ -114,7 +320,7 @@ async def favicon():
 async def health_check() -> HealthResponse:
     """Health check endpoint to verify system status"""
     whisper_loaded = ASR_ENGINE is not None
-    piper_available = TTS_ENGINE is not None
+    tts_available = TTS_ENGINE is not None
     
     # Check GPU availability
     gpu_available = False
@@ -126,12 +332,29 @@ async def health_check() -> HealthResponse:
     
     # Test TTS functionality if available
     tts_working = False
-    if piper_available:
+    tts_backend_info = "unknown"
+    voice_count = 0
+    if tts_available:
         try:
-            test_audio = TTS_ENGINE.synthesize("test", voice=None)
-            tts_working = len(test_audio) > 0
+            # Get TTS backend health info
+            tts_health = TTS_ENGINE.health()
+            tts_working = tts_health.get("ok", False)
+            tts_backend_info = tts_health.get("message", "unknown")
+            
+            # Get voice count
+            voices = TTS_ENGINE.list_voices()
+            voice_count = len(voices) if voices else 0
+            
+            # Get TTS metrics
+            tts_metrics = TTS_ENGINE.get_metrics()
+            
+            # Test synthesis if backend is working
+            if tts_working:
+                test_audio = TTS_ENGINE.synthesize_with_metrics("test", voice=None)
+                tts_working = len(test_audio) > 0
         except Exception as e:
             logger.warning(f"TTS health check failed: {e}")
+            tts_backend_info = f"error: {str(e)}"
     
     # Test ASR functionality if available
     asr_working = False
@@ -145,22 +368,28 @@ async def health_check() -> HealthResponse:
         except Exception as e:
             logger.warning(f"ASR health check failed: {e}")
     
-    status = "healthy" if whisper_loaded and piper_available and tts_working else "degraded"
-    message = "All systems operational"
+    status = "healthy" if whisper_loaded and tts_available and tts_working else "degraded"
+    message = f"All systems operational. TTS: {tts_backend_info}, Voices: {voice_count}"
+    
+    # Add metrics to message if available
+    if tts_available and 'tts_metrics' in locals():
+        avg_time = tts_metrics.get('average_synthesis_time', 0)
+        count = tts_metrics.get('synthesis_count', 0)
+        message += f", Avg synthesis: {avg_time:.3f}s, Count: {count}"
     
     if not whisper_loaded:
         message = "Whisper ASR not loaded"
-    elif not piper_available:
-        message = "Piper TTS not available"
+    elif not tts_available:
+        message = "TTS backend not available"
     elif not tts_working:
-        message = "TTS synthesis not working"
+        message = f"TTS synthesis not working: {tts_backend_info}"
     elif not asr_working:
         message = "ASR transcription not working"
     
     return HealthResponse(
         status=status,
         whisper_loaded=whisper_loaded,
-        piper_available=piper_available,
+        piper_available=tts_available,  # Keep for backward compatibility
         gpu_available=gpu_available,
         message=message
     )
@@ -170,36 +399,53 @@ async def start_session(request: StartRequest):
     """Create a new session and initialize dialog"""
     if ASR_ENGINE is None or TTS_ENGINE is None:
         raise HTTPException(status_code=503, detail="Engines not initialized")
-    
+
+    # Per-session backend override
+    # Use global TTS engine from config only (UI override removed)
+    session_tts = TTS_ENGINE
+
     # Generate session ID
     session_id = str(uuid.uuid4())
-    
+
     # Create session directory
     session_dir = Path(__file__).parent.parent / "data" / "sessions" / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
-    
+
     logger.info(f"Starting new session {session_id} for {request.honorific} {request.patient_name}")
-    
+
     try:
-        # Initialize dialog
         scenario_path = Path(__file__).parent / "scenarios" / request.scenario
         dialog = Dialog(
             scenario_path=str(scenario_path),
             honorific=request.honorific,
             patient_name=request.patient_name
         )
-        
-        # Build greeting text
+
         greeting_text = dialog.build_greeting()
         logger.info(f"Session {session_id}: Greeting prepared")
-        
-        # Initialize WAV writer for full session recording
+
         wav_writer = WavAppendWriter(
             path=str(session_dir / "full_audio.wav"),
             sample_rate=config["audio"]["sample_rate"]
         )
-        
-        # Store session state
+
+        # Optionally precompute greeting TTS to avoid WS idle timeouts on connect
+        precomputed_greeting_audio = None
+        greeting_duration = 0.0
+        try:
+            precomputed_greeting_audio = synth_with_pauses(
+                session_tts,
+                greeting_text,
+                voice=request.voice or config.get("tts", {}).get("voice") or config["models"]["piper"]["default_voice"],
+                rate=request.rate,
+            )
+            greeting_duration = session_tts.get_audio_duration(precomputed_greeting_audio)
+            logger.info(
+                f"Session {session_id}: Precomputed greeting audio ({len(precomputed_greeting_audio)} bytes, {greeting_duration:.2f}s)"
+            )
+        except Exception as e:
+            logger.warning(f"Session {session_id}: Failed to precompute greeting TTS ({e}), will synthesize on WS connect")
+
         SESSIONS[session_id] = {
             "dialog": dialog,
             "writer": wav_writer,
@@ -208,15 +454,18 @@ async def start_session(request: StartRequest):
             "transcript": [],
             "finished": False,
             "voice": request.voice or config["models"]["piper"]["default_voice"],
-            "rate": request.rate
+            "rate": request.rate,
+            "tts": session_tts,
+            "precomputed_greeting_audio": precomputed_greeting_audio,
+            "precomputed_greeting_duration": greeting_duration,
         }
-        
+
         return JSONResponse({
             "session_id": session_id,
             "greeting": greeting_text,
             "status": "ready"
         })
-        
+
     except Exception as e:
         logger.error(f"Failed to start session {session_id}: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to initialize session: {str(e)}")
@@ -236,7 +485,8 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
     writer: WavAppendWriter = session_state["writer"]
     voice = session_state["voice"]
     rate = session_state["rate"]
-    
+    tts_engine: TTSBackend = session_state.get("tts", TTS_ENGINE)
+
     # Initialize VAD
     vad = StreamingVAD(
         sample_rate=config["vad"]["sample_rate"],
@@ -246,9 +496,38 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
         max_speech_duration_ms=config["vad"].get("max_speech_duration_ms", 15000)
     )
     
+    # Small keep-alive ping to prevent idle close while preparing audio
+    try:
+        await websocket.send_text(json.dumps({"type": "progress_update", "progress": {"status": "connecting"}}))
+    except Exception:
+        pass
+
+    # Helper: chunked audio sender to reduce frame size and improve time-to-first-byte
+    async def send_audio_chunked(ws: WebSocket, audio_bytes: bytes, chunk_size: int = 65536) -> None:
+        for i in range(0, len(audio_bytes), chunk_size):
+            await ws.send_bytes(audio_bytes[i:i + chunk_size])
+            await asyncio.sleep(0)  # yield to event loop
+
     # Send initial greeting
     try:
-        greeting_audio = TTS_ENGINE.synthesize(dialog.last_prompt_text, voice=voice, speaking_rate=rate)
+        precomputed = session_state.get("precomputed_greeting_audio")
+        if precomputed:
+            greeting_audio = precomputed
+            greeting_duration = float(session_state.get("precomputed_greeting_duration") or 0.0)
+        else:
+            try:
+                greeting_audio = synth_with_pauses(tts_engine, dialog.last_prompt_text, voice=voice, rate=rate)
+            except Exception as e:
+                logger.warning(f"Session {session_id}: Primary TTS failed ({e}); falling back to Piper if possible")
+                # Fallback to Piper backend
+                try:
+                    fallback_cfg = dict(config)
+                    fallback_cfg.setdefault('tts', {})
+                    fallback_cfg['tts']['backend'] = 'piper'
+                    tts_engine = create_tts_backend(fallback_cfg)
+                    greeting_audio = tts_engine.synthesize_with_metrics(dialog.last_prompt_text, voice=voice, speaking_rate=rate)
+                except Exception as e2:
+                    raise RuntimeError(f"TTS fallback failed: {e2}")
         
         # Validate audio data before sending
         if len(greeting_audio) == 0:
@@ -258,6 +537,7 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
         if not greeting_audio.startswith(b'RIFF') or b'WAVE' not in greeting_audio[:12]:
             logger.warning(f"Session {session_id}: Generated greeting audio may not be valid WAV format")
         
+        # Send as a single WS binary frame - client expects a complete WAV blob per message
         await websocket.send_bytes(greeting_audio)
         logger.info(f"Session {session_id}: Sent greeting audio ({len(greeting_audio)} bytes)")
         
@@ -271,13 +551,14 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
         logger.info(f"Session {session_id}: Sent greeting to transcript")
         
         # Calculate actual audio duration for proper timing
-        greeting_duration = TTS_ENGINE.get_audio_duration(greeting_audio)
-        if greeting_duration > 0:
-            logger.info(f"Session {session_id}: Greeting duration: {greeting_duration:.2f}s")
-        else:
-            # Fallback to estimation if duration calculation fails
-            greeting_duration = TTS_ENGINE.estimate_duration(dialog.last_prompt_text, voice=voice)
-            logger.info(f"Session {session_id}: Greeting duration (estimated): {greeting_duration:.2f}s")
+        if not precomputed:
+            greeting_duration = tts_engine.get_audio_duration(greeting_audio)
+            if greeting_duration > 0:
+                logger.info(f"Session {session_id}: Greeting duration: {greeting_duration:.2f}s")
+            else:
+                # Fallback to estimation if duration calculation fails
+                greeting_duration = tts_engine.estimate_duration(dialog.last_prompt_text, voice=voice)
+                logger.info(f"Session {session_id}: Greeting duration (estimated): {greeting_duration:.2f}s")
     except Exception as e:
         logger.error(f"Session {session_id}: Failed to send greeting: {e}")
         await websocket.close(code=1011, reason="TTS error")
@@ -286,7 +567,17 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
     # Wait for greeting to complete before sending first prompt
     try:
         # Wait for greeting audio to finish playing (add grace period)
-        await asyncio.sleep(max(0.5, greeting_duration + 1.0))  # Increased grace period
+        # Periodic keep-alive while waiting for greeting to play client-side
+        total_wait = max(0.5, greeting_duration + 0.3)
+        waited = 0.0
+        while waited < total_wait:
+            try:
+                await websocket.send_text(json.dumps({"type": "progress_update", "progress": {"status": "playing_greeting"}}))
+            except Exception:
+                pass
+            step = min(1.0, total_wait - waited)
+            await asyncio.sleep(step)
+            waited += step
         
         # Send initial progress update (0% at start)
         progress = dialog.get_progress()
@@ -308,11 +599,33 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
             await websocket.send_text(json.dumps(ai_question_message))
             logger.info(f"Session {session_id}: Sent AI question to transcript: {dialog.current_key}")
             
-            prompt_audio = TTS_ENGINE.synthesize(first_prompt, voice=voice, speaking_rate=rate)
+            try:
+                # Keep-alive during potentially long TTS synthesis
+                # Run synthesis in a thread to avoid blocking keep-alives
+                loop = asyncio.get_running_loop()
+                synth_task = loop.run_in_executor(None, lambda: synth_with_pauses(tts_engine, first_prompt, voice=voice, rate=rate))
+                while True:
+                    done = synth_task.done()
+                    try:
+                        await websocket.send_text(json.dumps({"type": "progress_update", "progress": {"status": "synthesizing"}}))
+                    except Exception:
+                        pass
+                    if done:
+                        break
+                    await asyncio.sleep(1.0)
+                prompt_audio = await synth_task
+            except Exception as e:
+                logger.warning(f"Session {session_id}: TTS failed for first prompt ({e}); attempting Piper fallback")
+                fallback_cfg = dict(config)
+                fallback_cfg.setdefault('tts', {})
+                fallback_cfg['tts']['backend'] = 'piper'
+                tts_engine = create_tts_backend(fallback_cfg)
+                prompt_audio = synth_with_pauses(tts_engine, first_prompt, voice=voice, rate=rate)
+            # Send as a single complete WAV blob
             await websocket.send_bytes(prompt_audio)
             
             # Calculate prompt duration and add grace period before listening
-            prompt_duration = TTS_ENGINE.get_audio_duration(prompt_audio)
+            prompt_duration = tts_engine.get_audio_duration(prompt_audio)
             if prompt_duration > 0:
                 logger.info(f"Session {session_id}: Sent first prompt ({prompt_duration:.2f}s)")
                 # Add grace period after prompt before VAD starts listening
@@ -357,7 +670,15 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
             reprompt_text = dialog.get_and_clear_reprompt() if hasattr(dialog, 'get_and_clear_reprompt') else None
             if reprompt_text:
                 try:
-                    reprompt_audio = TTS_ENGINE.synthesize(reprompt_text, voice=voice, speaking_rate=rate)
+                    try:
+                        reprompt_audio = synth_with_pauses(tts_engine, reprompt_text, voice=voice, rate=rate)
+                    except Exception as e:
+                        logger.warning(f"Session {session_id}: TTS failed for reprompt ({e}); attempting Piper fallback")
+                        fallback_cfg = dict(config)
+                        fallback_cfg.setdefault('tts', {})
+                        fallback_cfg['tts']['backend'] = 'piper'
+                        tts_engine = create_tts_backend(fallback_cfg)
+                        reprompt_audio = tts_engine.synthesize_with_metrics(reprompt_text, voice=voice, speaking_rate=rate)
                     await websocket.send_bytes(reprompt_audio)
                     logger.info(f"Session {session_id}: Sent reprompt")
                 except Exception as e:
@@ -373,7 +694,15 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                 if repeat_prompt:
                     logger.info(f"Session {session_id}: Repeating question due to timeout")
                     try:
-                        repeat_audio = TTS_ENGINE.synthesize(repeat_prompt, voice=voice, speaking_rate=rate)
+                        try:
+                            repeat_audio = synth_with_pauses(tts_engine, repeat_prompt, voice=voice, rate=rate)
+                        except Exception as e:
+                            logger.warning(f"Session {session_id}: TTS failed for repeat ({e}); attempting Piper fallback")
+                            fallback_cfg = dict(config)
+                            fallback_cfg.setdefault('tts', {})
+                            fallback_cfg['tts']['backend'] = 'piper'
+                            tts_engine = create_tts_backend(fallback_cfg)
+                            repeat_audio = tts_engine.synthesize_with_metrics(repeat_prompt, voice=voice, speaking_rate=rate)
                         await websocket.send_bytes(repeat_audio)
                         logger.info(f"Session {session_id}: Sent repeat question")
                     except Exception as e:
@@ -416,6 +745,34 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                     dialog.submit_answer(text)
                     logger.info(f"Session {session_id}: Dialog state after answer - finished: {dialog.finished}, consent_given: {dialog.consent_given}")
                     
+                    # If the question was confirm and queued a follow-up message, send it now
+                    try:
+                        followup = dialog.get_and_clear_post_answer() if hasattr(dialog, 'get_and_clear_post_answer') else None
+                        if followup:
+                            logger.info(f"Session {session_id}: Sending post-answer follow-up: '{followup[:100]}...'")
+                            try:
+                                follow_audio = synth_with_pauses(tts_engine, followup, voice=voice, rate=rate)
+                                follow_duration = tts_engine.get_audio_duration(follow_audio)
+                                logger.info(f"Session {session_id}: Follow-up audio generated ({len(follow_audio)} bytes, {follow_duration:.2f}s)")
+                            except Exception as e:
+                                logger.warning(f"Session {session_id}: TTS failed for follow-up ({e}); attempting Piper fallback")
+                                fallback_cfg = dict(config)
+                                fallback_cfg.setdefault('tts', {})
+                                fallback_cfg['tts']['backend'] = 'piper'
+                                tts_engine = create_tts_backend(fallback_cfg)
+                                follow_audio = tts_engine.synthesize_with_metrics(followup, voice=voice, speaking_rate=rate)
+                                follow_duration = tts_engine.get_audio_duration(follow_audio)
+                                logger.info(f"Session {session_id}: Follow-up audio generated via fallback ({len(follow_audio)} bytes, {follow_duration:.2f}s)")
+                            await websocket.send_bytes(follow_audio)
+                            logger.info(f"Session {session_id}: Follow-up audio sent to client")
+                            
+                            # Add grace period for follow-up audio to play
+                            if follow_duration > 0:
+                                await asyncio.sleep(follow_duration + 0.5)
+                                logger.info(f"Session {session_id}: Follow-up grace period completed")
+                    except Exception as e:
+                        logger.warning(f"Session {session_id}: Failed to send follow-up: {e}")
+
                     # Send progress update to frontend
                     progress = dialog.get_progress()
                     progress_message = {
@@ -454,7 +811,15 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                             
                             # Send wrap-up message
                             logger.info(f"Session {session_id}: Sending wrap-up message")
-                            wrapup_audio = TTS_ENGINE.synthesize(dialog.wrapup_text, voice=voice, speaking_rate=rate)
+                            try:
+                                wrapup_audio = synth_with_pauses(tts_engine, dialog.wrapup_text, voice=voice, rate=rate)
+                            except Exception as e:
+                                logger.warning(f"Session {session_id}: TTS failed for wrap-up ({e}); attempting Piper fallback")
+                                fallback_cfg = dict(config)
+                                fallback_cfg.setdefault('tts', {})
+                                fallback_cfg['tts']['backend'] = 'piper'
+                                tts_engine = create_tts_backend(fallback_cfg)
+                                wrapup_audio = tts_engine.synthesize_with_metrics(dialog.wrapup_text, voice=voice, speaking_rate=rate)
                             await websocket.send_bytes(wrapup_audio)
                             
                             await websocket.close(code=1000, reason="Dialog completed")
@@ -477,7 +842,15 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                             await websocket.send_text(json.dumps(ai_question_message))
                             logger.info(f"Session {session_id}: Sent AI question to transcript: {dialog.current_key}")
                             
-                            prompt_audio = TTS_ENGINE.synthesize(next_prompt, voice=voice, speaking_rate=rate)
+                            try:
+                                prompt_audio = synth_with_pauses(tts_engine, next_prompt, voice=voice, rate=rate)
+                            except Exception as e:
+                                logger.warning(f"Session {session_id}: TTS failed for next prompt ({e}); attempting Piper fallback")
+                                fallback_cfg = dict(config)
+                                fallback_cfg.setdefault('tts', {})
+                                fallback_cfg['tts']['backend'] = 'piper'
+                                tts_engine = create_tts_backend(fallback_cfg)
+                                prompt_audio = tts_engine.synthesize_with_metrics(next_prompt, voice=voice, speaking_rate=rate)
                             
                             # Validate audio data before sending
                             if len(prompt_audio) == 0:
@@ -500,7 +873,7 @@ async def audio_websocket(websocket: WebSocket, session_id: str):
                             pcm_buffer.clear()  # Clear audio buffer for new question
                             
                             # Log prompt duration and add grace period
-                            prompt_duration = TTS_ENGINE.get_audio_duration(prompt_audio)
+                            prompt_duration = tts_engine.get_audio_duration(prompt_audio)
                             if prompt_duration > 0:
                                 logger.info(f"Session {session_id}: Prompt duration: {prompt_duration:.2f}s")
                                 # Add grace period after prompt before VAD starts listening
@@ -589,6 +962,15 @@ async def download_transcript(session_id: str):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename=vera_session_{session_id}.zip"}
     )
+
+@app.get("/api/voices")
+async def list_voices():
+    try:
+        voices = TTS_ENGINE.list_voices() if TTS_ENGINE else []
+        return JSONResponse({"backend": config.get("tts", {}).get("backend", "piper"), "voices": voices})
+    except Exception as e:
+        logger.error("Failed to list voices: %s", e)
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 if __name__ == "__main__":
     import uvicorn

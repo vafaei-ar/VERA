@@ -28,7 +28,7 @@ class VERAApp {
     initializeElements() {
         const elementIds = [
             'setupSection', 'callSection', 'completeSection',
-            'honorific', 'patientName', 'voiceSelect', 'voiceRate', 'scenarioSelect',
+            'honorific', 'patientName', 'voiceRate', 'scenarioSelect',
             'startBtn', 'endCallBtn', 'downloadBtn', 'newCallBtn',
             'statusIndicator', 'statusText', 'progressContainer', 'progressFill', 'progressText',
             'ttsPlayer', 'healthStatus', 'healthDot', 'healthText',
@@ -62,10 +62,11 @@ class VERAApp {
         
         // Initial form validation
         this.validateForm();
-        
-        // Initialize transcript visibility based on checkbox (hidden by default on main page)
-        this.transcriptVisible = this.elements.toggleTranscript.checked;
+
+        // No backend/voice selection in UI; use server config
     }
+
+    async loadVoices() { /* UI removed; keep stub for compatibility */ }
     
     validateForm() {
         const isValid = this.elements.patientName.value.trim().length > 0;
@@ -109,16 +110,15 @@ class VERAApp {
             this.setStatus('Preparing call...');
             this.showSection('call');
             
-            // Gather form data
             const callData = {
                 honorific: this.elements.honorific.value,
                 patient_name: this.elements.patientName.value.trim(),
-                voice: this.elements.voiceSelect.value,
+                backend: undefined,
+                voice: undefined,
                 rate: parseFloat(this.elements.voiceRate.value),
                 scenario: this.elements.scenarioSelect.value
             };
             
-            // Start session
             const response = await fetch('/api/start', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -132,10 +132,7 @@ class VERAApp {
             const data = await response.json();
             this.sessionId = data.session_id;
             
-            // Initialize audio
             await this.initializeAudio();
-            
-            // Connect WebSocket
             await this.connectWebSocket();
             
         } catch (error) {

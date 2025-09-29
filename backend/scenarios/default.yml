@@ -7,10 +7,10 @@ meta:
 
 greeting:
   template: >
-    Good {timeofday} {honorific} {patient_name}. I am an AI stroke navigator calling from {organization}.
-    I understand you recently had an ischemic stroke and received care at {site}.
-    I'm going to ask a few questions to see how you're doing after discharge.
-    I can't answer questions during this call, but I'll record additional requests at the end.
+    Good {timeofday} {honorific} {patient_name}. [pause=100] I am an AI stroke navigator calling from {organization}. [pause=100]
+    I understand you recently had an ischemic stroke and received care at {site}. [pause=100]
+    I'm going to ask a few questions to see how you're doing after discharge. [pause=100]
+    I can't answer questions during this call, but I'll record additional requests at the end. [pause=100]
     With your consent, this call will be recorded for care documentation. 
   variables:
     - timeofday     # computed: morning/afternoon/evening
@@ -23,11 +23,23 @@ flow:
   - key: consent
     type: confirm
     prompt: "Do you consent to proceed with this recorded call?"
-    on_deny: "I understand. We won't proceed with the call. If this is an emergency, please call your local emergency number or 911. If you'd like to speak with someone from our care team, please call the main hospital number. Thank you and goodbye."
+    on_deny: >
+      I understand. [pause=100] We won't proceed with the call. [pause=100]
+      If this is an emergency, please call your local emergency number or 911. [pause=100]
+      If you'd like to speak with someone from our care team, please call the main hospital number. [pause=100]
+      Thank you and goodbye.
 
   - key: know_ischemic
+    type: confirm
+    prompt: "Do you know what an ischemic stroke is?"
+    on_deny: >
+      An ischemic stroke happens when a blood vessel supplying blood to the brain is blocked, which can cause brain cells to be damaged. [pause=400]
+      Knowing this can help with understanding your care plan.
+    on_affirm: "Great! [pause=100] We'll proceed to the next question."
+
+  - key: describe_condition
     type: free
-    prompt: "Do you know what an ischemic stroke is? Please share in your own words what you understand about your condition."
+    prompt: "Please share in your own words what you understand about your condition."
 
   - section: "General Well-Being"
   
@@ -42,80 +54,6 @@ flow:
   - key: pain_fatigue_mood
     type: free
     prompt: "Are you experiencing any pain, headaches, unusual fatigue, anxiety, or changes in your mood?"
-
-  - section: "Medications and Adherence"
-  
-  - key: meds_pickup
-    type: free
-    prompt: "Were you able to pick up all your prescribed medications from the pharmacy?"
-  
-  - key: meds_understanding
-    type: free
-    prompt: "Do you understand what each of your medications is for and how to take them? Do you have any questions about your medications?"
-  
-  - key: meds_adherence
-    type: free
-    prompt: "Have you missed any doses of your medications, or have you had trouble taking them as prescribed?"
-  
-  - key: meds_sidefx
-    type: free
-    prompt: "Have you noticed any side effects from your medications? This could include dizziness, unusual bleeding, nausea, or any other concerning symptoms."
-
-  - section: "Follow-up Care"
-  
-  - key: fup_scheduled
-    type: free
-    prompt: "Have you scheduled follow-up visits with your primary care provider and neurologist as recommended?"
-  
-  - key: rehab_scheduled
-    type: free
-    prompt: "Do you have rehabilitation therapy sessions scheduled? This might include physical therapy, occupational therapy, or speech therapy."
-  
-  - key: transport_help
-    type: free
-    prompt: "Do you need help with transportation to your medical appointments?"
-
-  - section: "Lifestyle Management"
-  
-  - key: lifestyle_adherence
-    type: free
-    prompt: "Have you been able to follow any diet or activity recommendations that were given to you at discharge?"
-  
-  - key: bp_readings
-    type: free
-    prompt: "Are you checking your blood pressure at home? If yes, what have your recent readings been?"
-  
-  - key: tobacco_alcohol
-    type: free
-    prompt: "Do you currently smoke tobacco or drink alcohol? Has anyone from the care team talked with you about reducing these risk factors?"
-
-  - section: "Daily Activities and Support"
-  
-  - key: adl_support
-    type: free
-    prompt: "How are you managing your daily activities like walking, bathing, dressing, and cooking? Do you need help with any of these activities?"
-  
-  - key: home_safety
-    type: free
-    prompt: "Are there any challenges with mobility or safety in your home? For example, stairs, bathroom access, or concerns about falling?"
-  
-  - key: support_system
-    type: free
-    prompt: "Do you have family or friends helping you at home? How is that support working for you?"
-
-  - section: "Resources and Next Steps"
-  
-  - key: who_to_call
-    type: free
-    prompt: "Do you know who to call if you experience new stroke symptoms or have urgent questions about your care?"
-  
-  - key: resources_interest
-    type: free
-    prompt: "Would you be interested in information about stroke support groups, counseling services, or community resources?"
-  
-  - key: specific_help
-    type: free
-    prompt: "Is there anything specific you need help with right now that we haven't discussed?"
   
   - key: additional_concerns
     type: free

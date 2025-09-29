@@ -48,6 +48,27 @@ header {
     margin-bottom: 3rem;
 }
 
+/* Brand */
+.brand {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+}
+
+.logo {
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+}
+
+.brand-text h1 {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--primary-color);
+    margin-bottom: 0.25rem;
+}
+
 header h1 {
     font-size: 3rem;
     font-weight: 700;
@@ -426,50 +447,51 @@ main {
     flex: 0 0 auto;
 }
 
-/* Checkbox styling */
-.checkbox-label {
-    display: flex;
+/* Toggle switch */
+.switch {
+    display: inline-flex;
     align-items: center;
+    gap: 0.5rem;
     cursor: pointer;
+    user-select: none;
+}
+
+.switch input { display: none; }
+
+.slider {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 28px;
+    background-color: #d1d5db;
+    border-radius: 9999px;
+    transition: background-color 0.2s ease;
+}
+
+.slider::before {
+    content: "";
+    position: absolute;
+    height: 22px;
+    width: 22px;
+    left: 3px;
+    top: 3px;
+    background-color: white;
+    border-radius: 9999px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+    transition: transform 0.2s ease;
+}
+
+.switch input:checked + .slider {
+    background-color: var(--primary-color);
+}
+
+.switch input:checked + .slider::before {
+    transform: translateX(20px);
+}
+
+.switch-text {
     font-size: 1rem;
     color: var(--text-primary);
-    margin: 0;
-}
-
-.checkbox-label input[type="checkbox"] {
-    display: none;
-}
-
-.checkmark {
-    width: 20px;
-    height: 20px;
-    border: 2px solid var(--primary-color);
-    border-radius: 4px;
-    margin-right: 0.5rem;
-    position: relative;
-    background: var(--bg-primary);
-    transition: all 0.2s ease;
-}
-
-.checkbox-label input[type="checkbox"]:checked + .checkmark {
-    background: var(--primary-color);
-    border-color: var(--primary-color);
-}
-
-.checkbox-label input[type="checkbox"]:checked + .checkmark::after {
-    content: "✓";
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    color: white;
-    font-weight: bold;
-    font-size: 14px;
-}
-
-.checkbox-label:hover .checkmark {
-    border-color: var(--primary-hover);
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.1);
 }
 
 /* Complete Section */

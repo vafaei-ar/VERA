@@ -44,6 +44,7 @@ class Dialog:
         self.finished = False
         self.consent_given = False
         self._reprompt_text: Optional[str] = None
+        self._post_answer_text: Optional[str] = None
         
         # Timeout tracking for question repetition
         self.question_start_time = None
@@ -278,6 +279,18 @@ class Dialog:
             if not (is_affirm or is_deny):
                 self._reprompt_text = f"Please answer yes or no. {self.last_prompt_text}"
                 self.start_question_timer()
+            else:
+                # Queue optional follow-up info based on on_affirm/on_deny in scenario
+                try:
+                    flow = self.scenario.get("flow", [])
+                    step = flow[self.current_index] if 0 <= self.current_index < len(flow) else {}
+                    if is_deny and isinstance(step.get("on_deny"), str):
+                        self._post_answer_text = step.get("on_deny")
+                    elif is_affirm and isinstance(step.get("on_affirm"), str):
+                        self._post_answer_text = step.get("on_affirm")
+                except Exception:
+                    # Ignore lookup issues
+                    pass
     
     def get_current_question(self) -> Optional[Dict]:
         """Get information about the current question"""
@@ -317,6 +330,12 @@ class Dialog:
         """Return reprompt text if any, and clear it."""
         text = self._reprompt_text
         self._reprompt_text = None
+        return text
+
+    def get_and_clear_post_answer(self) -> Optional[str]:
+        """Return optional follow-up message for the last answer, then clear it."""
+        text = self._post_answer_text
+        self._post_answer_text = None
         return text
     
     def get_scenario_info(self) -> Dict[str, Any]:
